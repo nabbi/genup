@@ -1,0 +1,8 @@
+# genup
+/var/log/portage/genup.log {
+        daily
+        rotate 14
+        delaycompress
+        notifempty
+        missingok
+}

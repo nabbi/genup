@@ -1,0 +1,4 @@
+# genup crontab
+# defined with your own schedule and flags
+# 4 2 * * *     genup >> /var/log/portage/genup.log 2>&1
+# 4 2 * * *     genup --email "sysadmin@example.com" --email-from "host@example.com" --live-rebuild >> /var/log/portage/genup.log 2>&1
