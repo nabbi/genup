@@ -109,11 +109,34 @@ send_email() {
     fi
 
     local subject="${PROGNAME} :: $(hostname) :: $1"
-    local body="$(date)\n$(hostname)\n${1}\n\n${2}"
+    local body=""
+    body+="$(hostname)\n"
+    body+="$(date)\n"
+    body+="$(uptime)\n"
+    body+="$(eselect profile list | grep "*" | awk '{ print $2 }')\n\n"
+    body+="${1}\n\n${2}"
 
     printf 'From: %s\r\nTo: %s\r\nSubject: %s\r\n\r\n%b' \
         "${EMAIL_FROM}" "${EMAIL_TO}" "${subject}" "${body}" | \
         sendmail -f "${EMAIL_FROM}" ${EMAIL_TO//,/ }
+}
+
+tail_logfile() {
+    # confirm we are all using the same logfile
+    if [[ ! -f "${LOG}" ]]; then
+        echo "\n\nfile not found: ${LOG}"
+        return
+    fi
+
+    local mtime=$(stat -c %Y ${LOG})
+    local now=$(date +%s)
+    if (( $now - $mtime <= 120 )); then
+        echo "\n\ntailing: ${LOG}\n\n$(tail -n 100 "${LOG}")"
+        return
+    else
+        echo "\n\nlog appears stale: ${LOG}\nconfirm paths to include tailing ${PROGNAME} logs upon error"
+        return
+    fi
 }
 
 set_usepkg() {
@@ -161,12 +184,7 @@ die() {
     echo
     echo -e "${RED_TEXT}${PREFIXSTRING}${RESET_ATTS}${PROGNAME}: Error: ${1} - exiting" >&2
 
-    local body
-    if [[ -f "${LOG}" ]]; then
-        body+="\n\n${PROGNAME} log file at: ${LOG}\n\n$(tail -n 100 "${LOG}")"
-    else
-        body+="\n\nlog not found: ${LOG}"
-    fi
+    local body+="$(tail_logfile)"
 
     send_email "error" "Error: ${1} - exiting\n\n${body}"
     cleanup_and_exit_with_code 1
@@ -260,6 +278,7 @@ check_gcc_config_and_reset_if_necessary() {
 
 display_greeting() {
     show "Gentoo System Updater v${VERSION}"
+    show "$(date)"
 }
 
 update_portage_tree_and_sync_eix() {
@@ -280,7 +299,6 @@ update_portage_tree_and_sync_eix() {
             return
         fi
     done
-    show "test2"
 
     if ((WEBRSYNC==1)); then
         # eix-sync will ignore other overlays in webrsync-gpg mode, so
@@ -645,7 +663,7 @@ purge_old_distfiles_if_desired() {
     # installed ebuild
     if ((ARG_KEEP_OLD_DISTFILES==0)); then
         show "Purging currently unused source tarballs to save space..."
-        eclean ${VERBOSITYFLAG} --deep distfiles
+        eclean ${VERBOSITYFLAG} --deep --time-limit=2w distfiles
     fi
 }
 
@@ -708,7 +726,7 @@ rebuild_where_missing_libraries_detected() {
 
 display_final_status() {
     local subject="successful"
-    local body
+    local body=""
 
     show
     if ((KERNELBUILT==1)); then
@@ -756,12 +774,28 @@ display_final_status() {
     fi
 
     local glsa=$(glsa-check -t all 2>&1)
-    show "${glsa}"
-    body+="${glsa}\n\n"
+    if ! grep -q "system is not affected" <<< "${glsa}"; then
+        show
+        show "${glsa}"
+        body+="${glsa}\n\n"
+    fi
 
     local news=$(eselect news list new)
-    show "${news}"
-    body+="${news}\n\n"
+    if ! grep -q "none found" <<< "${news}"; then
+        show
+        show "${news}"
+        body+="${news}\n\n"
+    fi
+
+	if which webapp-config >/dev/null 2>&1 ; then
+		local webapp=$(webapp-config --list-unused-installs)
+		if [ ! -z ${webapp} ]; then
+			show
+			show "There are unsued webapp installs"
+			show "${webapp}"
+			body+="webapp-config --list-unused-install\n${webapp}\n\n"
+		fi
+    fi
 
     show "You may now wish to issue:"
     show "  source /etc/profile"
@@ -769,6 +803,8 @@ display_final_status() {
     show "Subsequent login shells will automatically pick up any changes."
     show
     show "All done - your system is now up-to-date!"
+    show "$(date)"
+
     send_email "${subject}" "${body}"
 }
 
@@ -1034,7 +1070,6 @@ process_command_line_options() {
 
 # *************** start of script proper ***************
 suppress_colour_and_alert_if_output_not_to_a_terminal
-show "start: $(date)"
 check_if_root
 set_idle_io_priority
 process_command_line_options "${@}"
@@ -1048,7 +1083,6 @@ update_user_patches
 mount_boot
 remove_any_prior_emerge_resume_history
 run_fixups_if_present
-ensure_portage_itself_is_up_to_date
 #ensure_genup_itself_is_up_to_date
 try_emtee_update_if_enabled
 update_all_packages_in_world_set_and_dependencies
@@ -1069,6 +1103,5 @@ update_eix_metadata
 run_custom_updaters_if_present
 umount_boot
 display_final_status
-show "end: $(date)"
 cleanup_and_exit_with_code 0
 # **************** end of script proper ****************
