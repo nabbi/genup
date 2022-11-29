@@ -1,5 +1,5 @@
 # genup
-/var/log/portage/genup.log {
+/var/log/genup.log {
         daily
         rotate 14
         delaycompress

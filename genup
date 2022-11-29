@@ -31,7 +31,7 @@ shopt -s nullglob
 # ********************** variables ********************* 
 PROGNAME="$(basename "${0}")"
 VERSION="1.1.0"
-LOG="/var/log/portage/genup.log"
+LOG="/var/log/genup.log"
 ETCPROFILE="/etc/profile"
 UPDATERSDIR="/etc/${PROGNAME}/updaters.d"
 FIXUPSCRIPT="/etc/cron.weekly/fixup"
