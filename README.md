@@ -12,6 +12,7 @@ Notable changes:
 - git pull of /etc/portage/patches if users maintain a local patch repo there
 - auto-(un)mounting of /boot
 - set usepkg flag (ie NFS bindir mount)
+- genkernel build process if installed and buildkernel is not
 
 I decoupled the script from being dependant on the ebuild configuring emtree and buildkernel. If those optional components are installed on the system, the script will enable and use them.
 

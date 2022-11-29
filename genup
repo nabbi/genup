@@ -51,6 +51,7 @@ SHOWSUFFIX=""
 # decoupled to let script detect if optional components are install by user
 USE_BUILDKERNEL=true
 USE_EMTEE=true
+USE_GENKERNEL=true
 VERBOSITYFLAG="--quiet"
 ASKFLAG=""
 ALERTFLAG=""
@@ -113,7 +114,7 @@ send_email() {
     body+="$(hostname)\n"
     body+="$(date)\n"
     body+="$(uptime)\n"
-    body+="$(eselect profile list | grep "*" | awk '{ print $2 }')\n\n"
+    #body+="$(eselect profile list | grep "*" | awk '{ print $2 }')\n\n"
     body+="${1}\n\n${2}"
 
     printf 'From: %s\r\nTo: %s\r\nSubject: %s\r\n\r\n%b' \
@@ -337,7 +338,7 @@ update_user_patches() {
 
     # if portage user patches is a git repo, refresh it
     if [ -d /etc/portage/patches/.git ]; then
-        show "${GREEN_TEXT}Updating user patches"
+        show "You've been hacking. Updating portage user patches."
         git -C /etc/portage/patches/ pull
     fi
 }
@@ -413,7 +414,7 @@ try_emtee_update_if_enabled() {
     # resource intensive in some update situations (and can
     # also sometimes compute a successful update in cases where
     # a vanilla emerge -DuU --with-bdeps=y @world fails)
-    if "${USE_EMTEE}"; then
+    if "${USE_EMTEE}" = true; then
         # this is allowed to fail, since we'll try a full @world
         # emerge afterwards anyhow
         show "Attempting to update @world set (for new versions, or changed use flags)"
@@ -631,28 +632,88 @@ offer_kernel_upgrade_to_staging_if_available() {
     if ((ARG_NO_KERNEL_UPGRADE==1)); then
         return
     fi
+
+    local attempt_upgrade=0
     local CURRENT_KV="$(readlink /usr/src/linux)"
     local LATEST_KV_LINE="$(eselect kernel list | tail -n 1)"
     local LATEST_KV="$(awk '{print $2}' <<< ${LATEST_KV_LINE})"
     local LATEST_KV_INDEX="$(cut -d '[' -f 2 <<< ${LATEST_KV_LINE} | cut -d ']' -f 1)"
+
     if ! grep -q '*' <<< "${LATEST_KV_LINE}"; then
-        show "A kernel upgrade is available! You are running ${CURRENT_KV}"
-        if ((ARG_ASK==0)) || test_yn "Would you like to upgrade to ${LATEST_KV}"; then 
+        show "A kernel upgrade is available! You last kernel build source is ${CURRENT_KV}"
+        if ((ARG_ASK==0)) || test_yn "Would you like to upgrade to ${LATEST_KV}" || "${USE_GENKERNEL}" = true; then
             show "Setting up new kernel in staging..."
             eselect kernel set "${LATEST_KV_INDEX}"
-            show "Entering buildkernel..."
-            # following does not require your USB key to be inserted, as it
-            # only builds to staging in /boot...
-            ${BUILDKERNEL} ${ASKFLAG} ${ALERTFLAG} ${VERBOSITYFLAG} ${BUILDKERNELARGS} --stage-only
-            KERNELBUILT=1
+            attempt_upgrade=1
         else
             show "OK, leaving your kernel as is, to upgrade subsequently, issue:"
             show "  eselect kernel list"
             show "  eselect kernel set <n>"
             show "  buildkernel"
         fi
+    elif [[ ! $(grep $(uname -r | sed "s/-.*//") <<< "${CURRENT_KV}") ]]; then
+        warning "Running kernel does not match kernel build source version"
+        warning "Recommended building as it's unclear if that was done"
+        if ((ARG_ASK==0)) || test_yn "Would you like to upgrade to ${LATEST_KV}" || "${USE_GENKERNEL}" = true; then
+            attempt_upgrade=1
+        fi
     else
         show "Your kernel (${CURRENT_KV}) is the latest version available!"
+        return
+    fi
+
+    if ((attempt_upgrade==1)); then
+        if [[ "${USE_BUILDKERNEL}" = true ]]; then
+            show "Entering buildkernel..."
+            # following does not require your USB key to be inserted, as it
+            # only builds to staging in /boot...
+            ${BUILDKERNEL} ${ASKFLAG} ${ALERTFLAG} ${VERBOSITYFLAG} ${BUILDKERNELARGS} --stage-only
+            KERNELBUILT=1
+        elif [[ "${USE_GENKERNEL}" = true ]]; then
+            build_genkernel
+            KERNELBUILT=1
+        else
+            warning "Welp. Kernel upgrade is aviable but we were unable to attempt building it for you."
+        fi
+    fi
+}
+
+build_genkernel() {
+    # the caller function should have these checks too but keeping them incase process changes
+    if ((ARG_NO_KERNEL_UPGRADE==1)); then
+        return
+    fi
+    if [[ "${USE_GENKERNEL}" = false ]]; then
+        return
+    fi
+
+    show "Starting genkernel"
+
+    if [[ -f /proc/config.gz ]]; then
+        show "Using current running config in /proc/config.gz"
+        genkernel --kernel-config=/proc/config.gz all 2>&1
+    else
+        genkernel all 2>&1
+    fi
+
+    # app-admin/eclean-kernel
+    if which eclean-kernel >/dev/null 2>&1 ; then
+        show "Remove old kernel versions"
+        eclean-kernel -d -n 2
+    else
+        warning "app-admin/eclean-kernel not installed to remove old kernels"
+    fi
+
+    # sys-boot/grub
+    if which grub-mkconfig >/dev/null 2>&1 ; then
+        show "updating grub.cfg with grub-mkconfig"
+        grub-mkconfig -o /boot/grub/grub.cfg
+    # sys-boot/lilo
+    elif which lilo >/dev/null 2>&1 ; then
+        show "updating lilo"
+        lilo
+    else
+        warning "unable to update bootloader"
     fi
 }
 
@@ -668,6 +729,10 @@ purge_old_distfiles_if_desired() {
 }
 
 copy_new_kernel_from_staging_if_present_and_desired() {
+    if [[ "${USE_BUILDKERNEL}" = false ]]; then
+        return
+    fi
+
     declare -i DO_KERNELDEPLOY=0
     if ((KERNELBUILT==1)); then
         # we successfully built a new kernel to staging, now deploy it
@@ -679,7 +744,7 @@ copy_new_kernel_from_staging_if_present_and_desired() {
                 DO_KERNELDEPLOY=1
             fi
         fi
-        if ((DO_KERNELDEPLOY==1 && "${USE_BUILDKERNEL}")); then
+        if [[ $DO_KERNELDEPLOY==1 ]]; then
             show "Copying new kernel from staging..."
             buildkernel ${ASKFLAG} ${ALERTFLAG} ${VERBOSITYFLAG} --copy-from-staging
             KERNELDEPLOYED=1
@@ -735,20 +800,28 @@ display_final_status() {
             show "A new kernel has been built successfully, and deployed to your"
             show "EFI system partition; it will be used from the next reboot."
             body+="New kernel built pending reboot\n\n"
-        else
+        elif [[ "$USE_BUILDKERNEL" = true ]]; then
             show "An updated kernel has been successfully built in the staging area!"
             show "You can install it to your EFI system partition by issuing:"
             show "  buildkernel --copy-from-staging"
             body+="New kernel built in staging area\n\n"
+        elif [[ "$USE_GENKERNEL" = true ]]; then
+            show ""
+            subject+=" old kernel"
+            body+="Genkernel built $(readlink /usr/src/linux) to replace running kernel $(uname -r)\n"
+            body+="(Please validate your bootloader before attempting system restart)\n\n"
+        else
+            warning "Huh. We might have build a kernel but have no idea what happened to it"
         fi
-    elif ((ARG_NO_KERNEL_UPGRADE==0 && "${USE_BUILDKERNEL}")); then
-        subject+=" old kernel"
+    elif [[ $ARG_NO_KERNEL_UPGRADE==0 && "$USE_BUILDKERNEL" = true ]] ; then
         if buildkernel --is-new-kernel-available; then
             warning "You are currently running with an older kernel"
             warning "When ready, ensure you have copied the new version"
             warning "to the EFI system partition"
             warning "(using buildkernel --copy-from-staging), and then reboot to"
             warning "start using it."
+
+            subject+=" old kernel"
             body+="Running on an old kernel, an upgrade is available \n\n"
         fi
     fi
@@ -761,7 +834,7 @@ display_final_status() {
         body+="Please run dispatch-conf to review new configurations\n\n"
         warning "There are configuration file changes pending review!"
         warning "Please run dispatch-conf to interactively resolve them."
-        if "${USE_EMTEE}" && [[ -f "${FALLBACK_SENTINEL}" ]]; then
+        if "${USE_EMTEE}" = true && [[ -f "${FALLBACK_SENTINEL}" ]]; then
             rm -f "${FALLBACK_SENTINEL}"
             warning "  TAKE CARE: a full --emptytree @world emerge has been performed;"
             warning "  you may need to retain your current version of many"
@@ -787,14 +860,14 @@ display_final_status() {
         body+="${news}\n\n"
     fi
 
-	if which webapp-config >/dev/null 2>&1 ; then
-		local webapp=$(webapp-config --list-unused-installs)
-		if [ ! -z ${webapp} ]; then
-			show
-			show "There are unsued webapp installs"
-			show "${webapp}"
-			body+="webapp-config --list-unused-install\n${webapp}\n\n"
-		fi
+    if which webapp-config >/dev/null 2>&1 ; then
+        local webapp=$(webapp-config --list-unused-installs)
+        if [ ! -z ${webapp} ]; then
+            show
+            show "There are unsued webapp installs"
+            show "${webapp}"
+            body+="webapp-config --list-unused-install\n${webapp}\n\n"
+        fi
     fi
 
     show "You may now wish to issue:"
@@ -805,7 +878,9 @@ display_final_status() {
     show "All done - your system is now up-to-date!"
     show "$(date)"
 
-    send_email "${subject}" "${body}"
+    if [[ ! -z ${body} ]]; then
+        send_email "${subject}" "${body}"
+    fi
 }
 
 print_usage() {
@@ -895,10 +970,10 @@ display_usage_message_and_bail_out() {
 internal_consistency_option_checks() {
     # following not exhaustive, just some more obvious snafus
     local KERNMSG="--no-kernel-upgrade"
-    if ! "${USE_BUILDKERNEL}"; then
+    if "${USE_BUILDKERNEL}" = false; then
         KERNMSG="buildkernel USE flag unset"
     fi
-    if ((ARG_NO_KERNEL_UPGRADE==1)) || ! "${USE_BUILDKERNEL}"; then
+    if ((ARG_NO_KERNEL_UPGRADE==1)); then
         if [[ -n "${BUILDKERNELARGS}" ]]; then
             display_usage_message_and_bail_out "cannot specify --buildkernel-args with ${KERNMSG}"
         fi
@@ -1041,10 +1116,6 @@ process_command_line_options() {
         warning "disabling buildkernel, not found"
         USE_BUILDKERNEL=false
     fi
-    # force 'no kernel upgrade' mode if buildkernel USE flag not set
-    if ! "${USE_BUILDKERNEL}"; then
-        ARG_NO_KERNEL_UPGRADE=1
-    fi
     if ((ARG_NO_NOCACHE==1)); then
         NOCACHE=""
     fi
@@ -1063,6 +1134,20 @@ process_command_line_options() {
             warning "email recipients "${EMAIL_TO}" defined without email-from address, disabling sendmail"
             EMAIL_TO=""
         fi
+    fi
+    # sys-kernel/genkernel
+    if ! which genkernel >/dev/null 2>&1 ; then
+        warning "disabling genkernel, not found"
+        USE_GENKERNEL=false
+    fi
+
+    # make sure only one kernel build process is activated
+    if [[ "${USE_GENKERNEL}" = false && "${USE_BUILDKERNEL}" = false ]]; then
+        warning "disabling kernel builds as dependencies not found on system"
+        ARG_NO_KERNEL_UPGRADE=1
+    elif [[ "${USE_GENKERNEL}" = true && "${USE_BUILDKERNEL}" = true ]]; then
+        warning "buildkernel is present, disabling genkernel functions"
+        USE_GENKERNEL=false
     fi
 
     internal_consistency_option_checks
@@ -1088,11 +1173,11 @@ try_emtee_update_if_enabled
 update_all_packages_in_world_set_and_dependencies
 rebuild_live_packages
 remove_unreferenced_packages
-rebuild_external_modules_if_necessary
 rebuild_packages_depending_on_stale_libraries
 bring_old_perl_modules_up_to_date
-interactively_resolve_clashing_config_file_changes
 offer_kernel_upgrade_to_staging_if_available
+rebuild_external_modules_if_necessary
+interactively_resolve_clashing_config_file_changes
 remove_unreferenced_packages
 rebuild_where_missing_libraries_detected
 rebuild_packages_depending_on_stale_libraries
