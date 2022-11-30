@@ -691,9 +691,9 @@ build_genkernel() {
 
     if [[ -f /proc/config.gz ]]; then
         show "Using current running config in /proc/config.gz"
-        genkernel --kernel-config=/proc/config.gz all 2>&1
+        genkernel --no-menuconfig --kernel-config=/proc/config.gz all 2>&1
     else
-        genkernel all 2>&1
+        genkernel --no-menuconfig all 2>&1
     fi
 
     # app-admin/eclean-kernel
