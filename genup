@@ -807,7 +807,6 @@ display_final_status() {
             body+="New kernel built in staging area\n\n"
         elif [[ "$USE_GENKERNEL" = true ]]; then
             show ""
-            subject+=" old kernel"
             body+="Genkernel built $(readlink /usr/src/linux) to replace running kernel $(uname -r)\n"
             body+="(Please validate your bootloader before attempting system restart)\n\n"
         else
