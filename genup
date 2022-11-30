@@ -786,7 +786,7 @@ rebuild_where_missing_libraries_detected() {
     # emerge --depclean) and attempt to fix them, by re-emerging the broken
     # libraries and binaries (shouldn't do much nowadays, but good to check!)
     show "Fixing any broken/missing libraries and binaries caused by cleanup..."
-    revdep-rebuild 
+    revdep-rebuild ${VERBOSITYFLAG}
 }
 
 display_final_status() {
