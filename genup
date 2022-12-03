@@ -791,7 +791,7 @@ update_eix_metadata() {
 remove_unreferenced_packages() {
 
     check_webapp_config
-    if ((WEBAPP_CONFIG=1)); then
+    if ((WEBAPP_CONFIG==1)); then
         warning "There are unused webapp-config installs, skipping depclean"
         return
     fi
@@ -819,11 +819,11 @@ check_webapp_config() {
 
     if ! which webapp-config >/dev/null 2>&1 ; then
         return
-    fi
-
-    local webapp=$(webapp-config --list-unused-installs)
-    if [[ ! -z ${webapp} ]]; then
-        WEBAPP_CONFIG=1
+    else
+       local webapp=$(webapp-config --list-unused-installs)
+       if [[ ! -z ${webapp} ]]; then
+            WEBAPP_CONFIG=1
+       fi
     fi
 
 }
@@ -898,7 +898,7 @@ display_final_status() {
         body+="${news}\n\n"
     fi
 
-    if ((WEBAPP_CONFIG=1)); then
+    if ((WEBAPP_CONFIG==1)); then
         local webapp=$(webapp-config --list-unused-installs)
         show
         show "There are unused webapp installs"
