@@ -75,7 +75,7 @@ if "${USE_NOCACHE}"; then
     NOCACHE="nocache"
 fi
 declare -i KERNELBUILT=0 KERNELDEPLOYED=0 NEEDSDISPATCHCONF=0
-declare -i WEBRSYNC=0
+declare -i WEBRSYNC=0 WEBAPP_CONFIG=0
 # program arguments (booleans in this case)
 declare -i ARG_ASK=0 ARG_DEPLOYFROMSTAGING=0 ARG_HELP=0 ARG_NO_KERNEL_UPGRADE=0
 declare -i ARG_VERBOSE=0 ARG_VERSION=0 ARG_DISPATCHCONF=0
@@ -247,6 +247,23 @@ read_portage_info_if_necessary() {
     fi
 }
 
+update_toolchain () {
+    # Bug 753500 glibc. installing a binary package of glibc before other packages
+    # can leave system in a dysfuntional state.
+    # We'll update other toolchain packages here too
+
+    show "Checking if toolchain packages need updating"
+    local pkg
+    local packages="sys-devel/gcc sys-libs/glibc sys-devel/binutils dev-util/cmake"
+    for pkg in $packages; do
+        if emerge --pretend --update ${pkg} | grep -e "^\[ebuild.*U.*\] ${pkg}" > /dev/null 2>&1; then
+            show "Updating ${pkg}"
+            ${EMERGE} ${EMERGE_USEPKG} ${VERBOSITYFLAG} --oneshot --update ${pkg}
+        fi
+    done
+
+}
+
 check_gcc_config_and_reset_if_necessary() {
     # check if gcc-config exists with an error - if it does, then
     # attempt to set one based on the current gcc version number
@@ -396,17 +413,17 @@ ensure_portage_itself_is_up_to_date() {
         warning "Could not update Portage: proceeding anyway"
 }
 
-ensure_genup_itself_is_up_to_date() {
-    show "Bringing genup itself up to date..."
-    ${EMERGE} ${VERBOSITYFLAG} --oneshot --update app-portage/genup
-    # if the above caused the version of genup to change, exec ourselves
-    # for a full restart
-    if [[ $("${SCRIPTPATH}" --version) != ${VERSION} ]]; then
-        warning "The version of genup has changed!"
-        warning "Restarting genup process..."
-        exec "${SCRIPTPATH}" ${ORIGINAL_ARGS}
-    fi
-}
+#ensure_genup_itself_is_up_to_date() {
+#    show "Bringing genup itself up to date..."
+#    ${EMERGE} ${VERBOSITYFLAG} --oneshot --update app-portage/genup
+#    # if the above caused the version of genup to change, exec ourselves
+#    # for a full restart
+#    if [[ $("${SCRIPTPATH}" --version) != ${VERSION} ]]; then
+#        warning "The version of genup has changed!"
+#        warning "Restarting genup process..."
+#        exec "${SCRIPTPATH}" ${ORIGINAL_ARGS}
+#    fi
+#}
 
 try_emtee_update_if_enabled() {
     # if the emtee USE flag is enabled, then try doing an initial
@@ -772,6 +789,12 @@ update_eix_metadata() {
 }
 
 remove_unreferenced_packages() {
+
+    check_webapp_config
+    if ((WEBAPP_CONFIG=1)); then
+        warning "There are unused webapp-config installs, skipping depclean"
+        return
+    fi
     # following should be reasonably safe, it removes any packages that are not
     # required by the transitive closure of @world set dependencies
     show "Removing packages not required by @world set..."
@@ -787,6 +810,22 @@ rebuild_where_missing_libraries_detected() {
     # libraries and binaries (shouldn't do much nowadays, but good to check!)
     show "Fixing any broken/missing libraries and binaries caused by cleanup..."
     revdep-rebuild ${VERBOSITYFLAG}
+}
+
+check_webapp_config() {
+    # check if webapp-config has unused installs
+    # performing a depclean before upgrading the webapps can leave exiting
+    # installs broken
+
+    if ! which webapp-config >/dev/null 2>&1 ; then
+        return
+    fi
+
+    local webapp=$(webapp-config --list-unused-installs)
+    if [[ ! -z ${webapp} ]]; then
+        WEBAPP_CONFIG=1
+    fi
+
 }
 
 display_final_status() {
@@ -859,14 +898,13 @@ display_final_status() {
         body+="${news}\n\n"
     fi
 
-    if which webapp-config >/dev/null 2>&1 ; then
+    if ((WEBAPP_CONFIG=1)); then
         local webapp=$(webapp-config --list-unused-installs)
-        if [ ! -z ${webapp} ]; then
-            show
-            show "There are unsued webapp installs"
-            show "${webapp}"
-            body+="webapp-config --list-unused-install\n${webapp}\n\n"
-        fi
+        show
+        show "There are unused webapp installs"
+        show "${webapp}"
+        body+="webapp-config --list-unused-install\n${webapp}\n\n"
+        body+="--depclean was skipped to avoid breaking exisitng webapp installs\n\n"
     fi
 
     show "You may now wish to issue:"
@@ -1161,9 +1199,10 @@ set_usepkg
 check_if_using_webrsync_gpg
 check_if_using_distcc
 display_greeting
-check_gcc_config_and_reset_if_necessary
 update_portage_tree_and_sync_eix
 update_user_patches
+update_toolchain
+check_gcc_config_and_reset_if_necessary
 mount_boot
 remove_any_prior_emerge_resume_history
 run_fixups_if_present
