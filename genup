@@ -413,17 +413,19 @@ ensure_portage_itself_is_up_to_date() {
         warning "Could not update Portage: proceeding anyway"
 }
 
-#ensure_genup_itself_is_up_to_date() {
-#    show "Bringing genup itself up to date..."
-#    ${EMERGE} ${VERBOSITYFLAG} --oneshot --update app-portage/genup
-#    # if the above caused the version of genup to change, exec ourselves
-#    # for a full restart
-#    if [[ $("${SCRIPTPATH}" --version) != ${VERSION} ]]; then
-#        warning "The version of genup has changed!"
-#        warning "Restarting genup process..."
-#        exec "${SCRIPTPATH}" ${ORIGINAL_ARGS}
-#    fi
-#}
+ensure_genup_itself_is_up_to_date() {
+    # the 9999 ebuild in oubliette-overlay sets the git HEAD as the version
+    # that allows this check to work against lastest git builds
+    show "Bringing genup itself up to date..."
+    ${EMERGE} ${VERBOSITYFLAG} --oneshot --update app-portage/genup
+    # if the above caused the version of genup to change, exec ourselves
+    # for a full restart
+    if [[ $("${SCRIPTPATH}" --version) != ${VERSION} ]]; then
+        warning "The version of genup has changed!"
+        warning "Restarting genup process..."
+        exec "${SCRIPTPATH}" ${ORIGINAL_ARGS}
+    fi
+}
 
 try_emtee_update_if_enabled() {
     # if the emtee USE flag is enabled, then try doing an initial
@@ -1206,7 +1208,7 @@ check_gcc_config_and_reset_if_necessary
 mount_boot
 remove_any_prior_emerge_resume_history
 run_fixups_if_present
-#ensure_genup_itself_is_up_to_date
+ensure_genup_itself_is_up_to_date
 try_emtee_update_if_enabled
 update_all_packages_in_world_set_and_dependencies
 rebuild_live_packages
