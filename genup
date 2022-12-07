@@ -848,8 +848,7 @@ display_final_status() {
             body+="New kernel built in staging area\n\n"
         elif [[ "$USE_GENKERNEL" = true ]]; then
             show ""
-            body+="Genkernel built $(readlink /usr/src/linux) to replace running kernel $(uname -r)\n"
-            body+="(Please validate your bootloader before attempting system restart)\n\n"
+            body+="Genkernel built $(readlink /usr/src/linux) to replace running kernel $(uname -r)\n\n"
         else
             warning "Huh. We might have build a kernel but have no idea what happened to it"
         fi
@@ -872,6 +871,7 @@ display_final_status() {
     if ((NEEDSDISPATCHCONF==1)); then
         subject+=" new configs"
         body+="Please run dispatch-conf to review new configurations\n\n"
+        show
         warning "There are configuration file changes pending review!"
         warning "Please run dispatch-conf to interactively resolve them."
         if "${USE_EMTEE}" = true && [[ -f "${FALLBACK_SENTINEL}" ]]; then
@@ -883,6 +883,7 @@ display_final_status() {
             warning "  (use the 'z' / 'zap new' option where unsure)"
         fi
     else
+        show
         show "There are no configuration file changes pending review."
     fi
 
@@ -909,6 +910,7 @@ display_final_status() {
         body+="--depclean was skipped to avoid breaking exisitng webapp installs\n\n"
     fi
 
+    show
     show "You may now wish to issue:"
     show "  source /etc/profile"
     show "to ensure your current shell environment is fully up-to-date."
