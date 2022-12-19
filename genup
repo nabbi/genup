@@ -417,7 +417,7 @@ ensure_genup_itself_is_up_to_date() {
     # the 9999 ebuild in oubliette-overlay sets the git HEAD as the version
     # that allows this check to work against lastest git builds
     show "Bringing genup itself up to date..."
-    ${EMERGE} ${VERBOSITYFLAG} --oneshot --update app-portage/genup
+    ${EMERGE} ${VERBOSITYFLAG} --oneshot app-portage/genup
     # if the above caused the version of genup to change, exec ourselves
     # for a full restart
     if [[ $("${SCRIPTPATH}" --version) != ${VERSION} ]]; then
