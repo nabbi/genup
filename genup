@@ -115,7 +115,7 @@ send_email() {
     body+="$(date)\n"
     body+="$(uptime)\n"
     #body+="$(eselect profile list | grep "*" | awk '{ print $2 }')\n\n"
-    body+="${1}\n\n${2}"
+    body+="\n\n${2}"
 
     printf 'From: %s\r\nTo: %s\r\nSubject: %s\r\n\r\n%b' \
         "${EMAIL_FROM}" "${EMAIL_TO}" "${subject}" "${body}" | \
@@ -135,7 +135,7 @@ tail_logfile() {
         echo "\n\ntailing: ${LOG}\n\n$(tail -n 100 "${LOG}")"
         return
     else
-        echo "\n\nlog appears stale: ${LOG}\nconfirm paths to include tailing ${PROGNAME} logs upon error"
+        echo "\n\n${PROGNAME} log appears stale: ${LOG}\nunable to tail events leading up to error"
         return
     fi
 }
