@@ -523,7 +523,7 @@ rebuild_external_modules_if_necessary() {
     # (and may even be binary kernel packages, swept up into the
     # @module-rebuild set as they 'own' kernel modules in
     # /lib/modules/<release>/...)
-    if ! ${PUMP} ${EMERGE} ${EMERGE_USEPKG} ${VERBOSITYFLAG} @module-rebuild --exclude '*-bin'; then
+    if ! ${PUMP} ${EMERGE} ${VERBOSITYFLAG} @module-rebuild --exclude '*-bin'; then
         if MAKEOPTS="${MAKEOPTS-} -j1" FEATURES="${NOPUMP}" ${EMERGE} --resume; then
             warning "emerge @module-rebuild completed successfully, but only by restricting"
             warning "build parallelism and distcc"
