@@ -907,7 +907,7 @@ display_final_status() {
         show "There are unused webapp installs"
         show "${webapp}"
         body+="webapp-config --list-unused-install\n${webapp}\n\n"
-        body+="--depclean was skipped to avoid breaking exisitng webapp installs\n\n"
+        body+="--depclean was skipped to avoid breaking existing webapp installs\n\n"
     fi
 
     show
