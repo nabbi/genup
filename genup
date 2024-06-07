@@ -254,7 +254,7 @@ update_toolchain () {
 
     show "Checking if toolchain packages need updating"
     local pkg
-    local packages="sys-devel/gcc sys-libs/glibc sys-devel/binutils dev-util/cmake"
+    local packages="sys-devel/gcc sys-libs/glibc sys-devel/binutils dev-build/cmake"
     for pkg in $packages; do
         if emerge --pretend --update ${pkg} | grep -e "^\[ebuild.*U.*\] ${pkg}" > /dev/null 2>&1; then
             show "Updating ${pkg}"
@@ -620,7 +620,7 @@ check_if_dispatch_conf_needs_to_be_run() {
     # check if the user has any configuration file changes pending review
     # by dispatch-conf, and set the NEEDSDISPATCHCONF variable accordingly
     # we do a rough check to see if there are any pending changes
-    local DIRS_TO_CHECK="$(emerge --info | grep '^CONFIG_PROTECT=' | cut -d"\"" -f2)"
+    local DIRS_TO_CHECK="$(emerge --info 2>/dev/null | grep '^CONFIG_PROTECT=' | cut -d"\"" -f2)"
     local PENDING_CHANGES="$(find ${DIRS_TO_CHECK} -name '*._cfg*' -type f -print)"
     if [ -n "${PENDING_CHANGES}" ]; then
         NEEDSDISPATCHCONF=1
