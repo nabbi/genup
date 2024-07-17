@@ -337,7 +337,7 @@ update_portage_tree_and_sync_eix() {
     ${NOCACHE} eix-sync ${EIXSYNCARGS}
 
     # support legacy layman sync
-    if [ which layman >/dev/null 2>&1 ]; then
+    if which layman >/dev/null 2>&1 ; then
         local laymanlocation=$(grep -we "^storage" /etc/layman/layman.cfg | awk '{ print $3 }')
         if [ -w ${laymanlocation} ]; then
             layman ${VERBOSITYFLAG} -S
@@ -1167,7 +1167,7 @@ process_command_line_options() {
     fi
     # disable email if sendmail not found
     if [[ ! -z ${EMAIL_TO} ]]; then
-        if [ ! which sendmail >/dev/null 2>&1 ]; then
+        if ! which sendmail >/dev/null 2>&1 ; then
             warning 'disabling sendmail, not found'
             EMAIL_TO=""
         fi
