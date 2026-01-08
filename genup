@@ -30,7 +30,7 @@ shopt -s nullglob
 
 # ********************** variables ********************* 
 PROGNAME="$(basename "${0}")"
-VERSION="1.1.1"
+VERSION="1.1.2"
 LOG="/var/log/genup.log"
 ETCPROFILE="/etc/profile"
 UPDATERSDIR="/etc/${PROGNAME}/updaters.d"
@@ -55,6 +55,7 @@ USE_GENKERNEL=true
 VERBOSITYFLAG="--quiet"
 ASKFLAG=""
 ALERTFLAG=""
+COMPILER_MODE="auto"   # auto | gcc | clang
 EMERGE=""
 EMERGEARGS=""
 EMERGE_USEPKG=""
@@ -99,6 +100,76 @@ SCRIPTPATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOU
 
 have_cmd() {
     command -v "$1" >/dev/null 2>&1;
+}
+
+get_portage_envvar() {
+    # Usage: get_portage_envvar CC
+    # Best effort; prints empty string on failure.
+    local var="$1"
+    if have_cmd portageq; then
+        portageq envvar "${var}" 2>/dev/null || true
+        return
+    fi
+    # Fallback: parse emerge --info
+    read_portage_info_if_necessary
+    awk -F'"' -v v="${var}" '
+        $1 ~ ("^" v "=") { print $2; exit }
+    ' <<< "${PORTAGEINFO}" 2>/dev/null || true
+}
+
+detect_selected_compiler() {
+    # Returns: "gcc", "clang", or "unknown"
+    # Prefer Portage's CC; fall back to what's on PATH.
+
+    case "${COMPILER_MODE}" in
+        gcc|clang)
+            printf "%s\n" "${COMPILER_MODE}"
+            return 0
+            ;;
+    esac
+
+    local cc=""
+    cc="$(get_portage_envvar CC)"
+    cc="${cc##*/}"  # basename
+    case "${cc}" in
+        clang|clang-[0-9]*)
+            printf "%s\n" "clang"
+            return 0
+            ;;
+        gcc|gcc-[0-9]*)
+            printf "%s\n" "gcc"
+            return 0
+            ;;
+        "")
+            # no CC in envvar; fall back to PATH
+            if have_cmd clang; then
+                printf "%s\n" "clang"
+            elif have_cmd gcc; then
+                printf "%s\n" "gcc"
+            else
+                printf "%s\n" "unknown"
+            fi
+            return 0
+            ;;
+        *)
+            # CC is something else (ccache, distcc, wrapper)
+            # Try to resolve common wrappers.
+            if [[ "${cc}" == "ccache" || "${cc}" == "distcc" ]]; then
+                # Look at REAL_CC if present, else try CXX/CC again
+                local real_cc=""
+                real_cc="$(get_portage_envvar REAL_CC)"
+                real_cc="${real_cc##*/}"
+                case "${real_cc}" in
+                    clang|clang-[0-9]*) printf "%s\n" "clang" ;;
+                    gcc|gcc-[0-9]*)     printf "%s\n" "gcc" ;;
+                    *)                  printf "%s\n" "unknown" ;;
+                esac
+            else
+                printf "%s\n" "unknown"
+            fi
+            return 0
+            ;;
+    esac
 }
 
 send_email() {
@@ -281,32 +352,51 @@ read_portage_info_if_necessary() {
 }
 
 update_toolchain () {
-    # Bug 753500 glibc. installing a binary package of glibc before other packages
-    # can leave system in a dysfuntional state.
-    # We'll update other toolchain packages here too
-
     show "Checking if toolchain packages need updating"
+
+    local toolchain_mode=""
+    toolchain_mode="$(detect_selected_compiler)"
+
+    local base_packages="sys-libs/glibc sys-devel/binutils dev-build/cmake"
+    local compiler_packages=""
+
+    case "${toolchain_mode}" in
+        gcc)
+            compiler_packages="sys-devel/gcc"
+            ;;
+        clang)
+            # Keep this list conservative; adjust for your preferred stack.
+            # lld is optional but common. compiler-rt/libunwind/libcxx are
+            # only needed if you run libc++ and compiler-rt.
+            compiler_packages="sys-devel/clang sys-devel/llvm sys-devel/lld"
+            ;;
+        *)
+            warning "Unable to detect selected compiler; defaulting toolchain check to gcc+clang minimal"
+            compiler_packages="sys-devel/gcc sys-devel/clang sys-devel/llvm"
+            ;;
+    esac
+
     local pkg
-    local packages="sys-devel/gcc sys-libs/glibc sys-devel/binutils dev-build/cmake"
-    for pkg in $packages; do
-        if ${EMERGE} --pretend --update ${pkg} | grep -e "^\[ebuild.*U.*\] ${pkg}" >/dev/null 2>&1; then
+    for pkg in ${base_packages} ${compiler_packages}; do
+        if ${EMERGE} --pretend --update "${pkg}" 2>/dev/null | \
+        grep -Eq "^\[ebuild[[:space:]]+[^]]*\][[:space:]]+${pkg}([:-]|$)"; then
             show "Updating ${pkg}"
-            ${EMERGE} ${EMERGE_USEPKG} ${VERBOSITYFLAG} --oneshot --update ${pkg}
+            ${EMERGE} ${EMERGE_USEPKG} ${VERBOSITYFLAG} --oneshot --update "${pkg}"
         fi
     done
-
 }
 
 check_gcc_config_and_reset_if_necessary() {
     # If gcc-config reports no valid current profile, pick one from gcc-config -l.
     # Avoid hard dependency on eix.
 
-    if gcc-config --get-current-profile >/dev/null 2>&1; then
+    # If gcc isn't installed, do not treat this as an error.
+    if ! have_cmd gcc-config; then
         return
     fi
 
-    if ! have_cmd gcc-config; then
-        die "gcc-config invalid, and gcc-config command not found"
+    if gcc-config --get-current-profile >/dev/null 2>&1; then
+        return
     fi
 
     local chosen=""
@@ -346,6 +436,7 @@ check_gcc_config_and_reset_if_necessary() {
 
 display_greeting() {
     show "Gentoo System Updater v${VERSION}"
+    show "Compiler mode: $(detect_selected_compiler) (override: ${COMPILER_MODE})"
     show "$(date)"
 }
 
@@ -1033,6 +1124,7 @@ Options:
                         pass provided additional ARGS to the initial
                         (staging) buildkernel invocation (requires buildkernel
                         USE flag to have been set)
+  --compiler=MODE       select toolchain mode: auto (default), gcc, or clang
   -c, --dispatch-conf   run dispatch-conf, even if in non-interactive mode
   -C, --no-custom-updaters
                         do not run any custom updaters from the
@@ -1145,11 +1237,18 @@ check_if_using_webrsync_gpg() {
 process_command_line_options() {
     local TEMP
     declare -i RC
+
+    local short_opts="aAb:cCde:EFhiklmMnNpr:SvVx:"
+    local long_opts="ask,alert,compiler:,email:,email-from:,buildkernel-args:,dispatch-conf,no-custom-updaters,deploy-from-staging,emerge-args:,no-emtee,no-fixups,help,ignore-required-changes,keep-old-distfiles,no-eix-metadata-update,live-rebuild,no-module-rebuild,no-kernel-upgrade,no-nocache,no-perl-cleaner,adjustment:,no-eix-sync,verbose,version,eix-sync-args:"
+
     set +e
-        # error trapping off, as we want to handle errors
-        TEMP="$(getopt -o aAb:cCde:EFhiklmMnNpr:SvVx: --long ask,alert,email:,email-from:,buildkernel-args:,dispatch-conf,no-custom-updaters,deploy-from-staging,emerge-args:,no-emtee,no-fixups,help,ignore-required-changes,keep-old-distfiles,no-eix-metadata-update,live-rebuild,no-module-rebuild,no-kernel-upgrade,no-nocache,no-perl-cleaner,adjustment:,no-eix-sync,verbose,version,eix-sync-args: -n "${PROGNAME}" -- "${@}")"
-        RC="${?}"
+    TEMP="$(getopt \
+        -o "${short_opts}" \
+        --long "${long_opts}" \
+        -n "${PROGNAME}" -- "${@}")"
+    RC=$?
     set -e
+
     if ((RC!=0)); then
         display_usage_message_and_bail_out
     fi
@@ -1207,6 +1306,18 @@ process_command_line_options() {
                     "") shift 2 ;;
                     *) EIXSYNCARGS="${2}" ; shift 2 ;;
                 esac ;;
+            --compiler)
+                case "${2}" in
+                    auto|gcc|clang)
+                        COMPILER_MODE="${2}"
+                        shift 2
+                        ;;
+                    *)
+                        display_usage_message_and_bail_out \
+                            "Invalid --compiler value '${2}' (use auto, gcc, or clang)"
+                        ;;
+                esac
+                ;;
             --) shift ; break ;;
             *) die "Internal error!" ;;
         esac
@@ -1251,14 +1362,13 @@ process_command_line_options() {
         warning "disabling emtee, not found"
         USE_EMTEE=false
     fi
-    # disable email if sendmail not found
-    if [[ -z "${EMAIL_TO:-}" ]]; then
-        if ! have_cmd sendmail ; then
-            warning 'disabling sendmail, not found'
+    # disable email if sendmail not found / misconfigured
+    if [[ -n "${EMAIL_TO:-}" ]]; then
+        if ! have_cmd sendmail; then
+            warning "disabling sendmail, not found"
             EMAIL_TO=""
-        fi
-        if [[ -z ${EMAIL_FROM} ]]; then
-            warning "email recipients "${EMAIL_TO}" defined without email-from address, disabling sendmail"
+        elif [[ -z "${EMAIL_FROM:-}" ]]; then
+            warning "email recipients '${EMAIL_TO}' defined without --email-from address, disabling sendmail"
             EMAIL_TO=""
         fi
     fi
