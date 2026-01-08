@@ -2,6 +2,7 @@
 /var/log/genup.log {
         daily
         rotate 14
+        compress
         delaycompress
         notifempty
         missingok

@@ -1,4 +1,4 @@
-.TH GENUP 8 "Version 1.0.28: September 2020"
+.TH GENUP 8 "Version 1.1.1: January 2026"
 .SH NAME
 genup \- update Portage tree, all installed packages, and kernel
 .SH SYNOPSIS
@@ -7,7 +7,7 @@ genup \- update Portage tree, all installed packages, and kernel
 .SH DESCRIPTION
 .B genup
 is a utility intended to simplify the process of keeping your Gentoo system
-up to date. 
+up to date.
 When invoked, it automatically performs the following steps, in order:
 .br
 .RS
@@ -15,7 +15,27 @@ When invoked, it automatically performs the following steps, in order:
 updates Portage tree & overlays; syncs \fBeix\fR(1)
 (if desired)
 .br
-(using (if needed) \fBemaint sync --auto\fR, and \fBeix-sync\fR)
+(using, if needed, \fBemaint sync --auto\fR, and \fBeix-sync\fR)
+.IP \(bu 2
+updates Portage user patches (if present)
+.br
+(using \fBgit -C /etc/portage/patches pull\fR)
+.IP \(bu 2
+updates selected toolchain packages first (best effort)
+.br
+(using \fBemerge --oneshot --update\fR for
+\fBsys-devel/gcc\fR,
+\fBsys-libs/glibc\fR,
+\fBsys-devel/binutils\fR,
+\fBdev-build/cmake\fR)
+.IP \(bu 2
+checks and repairs gcc configuration if invalid (best effort)
+.br
+(using \fBgcc-config\fR(1), \fBenv-update\fR, and re-emerging \fBlibtool\fR)
+.IP \(bu 2
+mounts \fI/boot\fR if required, and remounts writable when necessary
+.br
+(using \fBfindmnt\fR(8), \fBmount\fR(8), and \fBumount\fR(8))
 .IP \(bu 2
 removes any prior \fBemerge\fR(1) resume history
 .br
@@ -25,55 +45,64 @@ on aarch64, attempts to apply any pending fixups
 .br
 (if desired, by running \fI/etc/cron.weekly/fixup\fR; errors non-fatal)
 .IP \(bu 2
-ensures Portage itself is up-to-date
+ensures Portage itself is up-to-date (best effort)
 .br
-(using \fBemerge --oneshot --update portage\fR)
+(using \fBemerge --oneshot --update sys-apps/portage\fR; failures are warnings)
 .IP \(bu 2
-ensures genup itself is up-to-date (restarting if not)
+ensures genup itself is up-to-date (restarting if the version changes)
 .br
-(using \fBemerge --oneshot --update genup\fR)
+(using \fBemerge --oneshot app-portage/genup\fR)
+.IP \(bu 2
+attempts a preliminary @world update using \fBemtee\fR(1)
+.br
+(if \fBemtee\fR is installed and not disabled; failure is non-fatal)
 .IP \(bu 2
 updates all packages in the @world set
 .br
-(first using \fBemtee\fR, if the matching USE flag is set, and then using \fBemerge --deep --with-bdeps=y --changed-use --update @world\fR)
+(using \fBemerge --deep --with-bdeps=y --changed-use --update @world\fR,
+with backtracking and retry logic)
 .IP \(bu 2
-removes unreferenced packages
+optionally rebuilds live (-9999) packages
 .br
-(using \fBemerge --depclean\fR)
+(using \fBemerge @live-rebuild\fR)
 .IP \(bu 2
-builds any external modules (such as those for VirtualBox)
+removes unreferenced packages (first pass)
 .br
-(using \fBemerge @module-rebuild --exclude '*-bin'\fR)
+(using \fBemerge --depclean\fR; skipped if \fBwebapp-config\fR reports unused installs)
 .IP \(bu 2
-rebuilds any packages depending on stale libraries
+rebuilds packages depending on stale libraries
 .br
-(using \fBemerge @preserved-rebuild\fR)
-.IP \(bu 2
-updates any old \fBperl\fR(1) modules (if desired)
-.br
-(using \fBperl-cleaner --all\fR)
-.IP \(bu 2
-removes stale versions of \fBpython\fR(1) from eselect list
-.br
-(using \fBeselect python cleanup\fR)
-.IP \(bu 2
-resolves clashing config file changes (in interactive mode)
-.br
-(using \fBdispatch-conf\fR)
-.IP \(bu 2
-upgrades the kernel if possible (to staging, in \fI/boot\fR)
-.br
-(using \fBbuildkernel --stage-only\fR)
-.IP \(bu 2
-removes unreferenced packages (again)
-.br
-(using \fBemerge --depclean\fR)
+(using \fBemerge @preserved-rebuild\fR; run twice, second pass suppressing getbinpkg)
 .IP \(bu 2
 fixes missing shared library dependencies
 .br
 (using \fBrevdep-rebuild\fR)
 .IP \(bu 2
-rebuilds any packages depending on stale libraries (again)
+updates any old \fBperl\fR(1) modules (if desired)
+.br
+(using \fBperl-cleaner --all\fR)
+.IP \(bu 2
+upgrades the kernel if possible (to staging, in \fI/boot\fR)
+.br
+(using \fBbuildkernel --stage-only\fR when available; otherwise \fBgenkernel\fR)
+.IP \(bu 2
+builds any external modules (such as those for VirtualBox)
+.br
+(using \fBemerge @module-rebuild --exclude '*-bin'\fR)
+.IP \(bu 2
+resolves clashing config file changes
+.br
+(using \fBdispatch-conf\fR; always in interactive mode, or if forced)
+.IP \(bu 2
+removes unreferenced packages (second pass)
+.br
+(using \fBemerge --depclean\fR)
+.IP \(bu 2
+fixes missing shared library dependencies (second check)
+.br
+(using \fBrevdep-rebuild\fR)
+.IP \(bu 2
+rebuilds packages depending on stale libraries (second pass)
 .br
 (using \fBemerge @preserved-rebuild\fR)
 .IP \(bu 2
@@ -85,262 +114,119 @@ deploys new kernel from staging (if desired and available)
 .br
 (using \fBbuildkernel --copy-from-staging\fR)
 .IP \(bu 2
-updates environment settings (as a precautionary measure)
+updates environment settings
 .br
 (using \fBenv-update\fR)
-
 .IP \(bu 2
 updates the \fBeix\fR(1) package metadata (if desired)
 .br
 (using \fBeix-sync -0\fR)
-
 .IP \(bu 2
 runs any custom updaters in \fI/etc/genup/updaters.d\fR
 .PP
 .RE
-The \fBgenup\fR utility can be invoked in non-interative (default) or 
+The \fBgenup\fR utility can be invoked in non-interactive (default) or
 interactive mode (see the \fB--ask\fR option, below).
-Non-interactive mode is suitable for use in a scripted invocation, for example
+Non-interactive mode is suitable for scripted invocation, for example
 as part of a nightly \fBcron\fR(8) job (see \fBAUTOMATING GENUP\fR, below).
 .SH OPTIONS
 .TP
 .BR \-a ", " \-\-ask
-By default, \fBgenup\fR will:
-a) attempt to perform the update automatically;
-b) attempt to rebuild the kernel (if a new version becomes available);
-c) fail immediately on any error; 
-d) invoke underlying tools (such as \fBbuildkernel\fR(8)) in non-interactive
-mode; and
-e) not invoke \fBdispatch-conf\fR(1) to resolve clashing configuration file
-updates (unless the \fB--dispatch-conf\fR option has been specified)
-
-However, if you supply the \fB--ask\fR option, then \fBgenup\fR will instead:
-a) prompt for confirmation during important steps of the update;
-b) ask whether or not you wish to rebuild the kernel
-(if a new version becomes available)
-c) fail immediately on any error, \fBexcept\fR when that error occurs during the
-@world update \fBemerge\fR(1) (in which case, prompt whether or not to retry,
-allowing the problem \(em for example, a missing use flag \(em to be fixed in
-a separate terminal);
-d) invoke most underlying tools (such as \fBbuildkernel\fR(8)) in interactive mode; and
-e) invoke \fBdispatch-conf\fR(1) to resolve clashing configuration file updates.
-
-In both interactive and non-interactive modes, \fBgenup\fR can be instructed
-to skip the kernel rebuild check, using the \fB--no-kernel-upgrade\fR option
-(see below).
+Prompt for confirmation during important steps of the update.
+In interactive mode, failures during the @world update allow retry after
+manual intervention.
 .TP
 .BR \-A ", " \-\-alert
-If possible, sounds the terminal bell when interaction is needed.
+Sound the terminal bell when interaction is required.
 Selecting this option automatically selects \fB--ask\fR.
 .TP
 .BR \-b ", " \-\-buildkernel\-args\=ADDITIONAL_ARGS
-Passes the specified arguments to the main
+Pass additional arguments to the initial
 .BR buildkernel (8)
-invocation (the one used to create a new kernel in the \fI/boot\fR staging
-area). These arguments are \fInot\fR passed to the second invocation, where used
-(which copies the built kernel to from the staging area to the system
-partition).
+invocation used to build the kernel in the staging area.
 .TP
 .BR \-c ", " \-\-dispatch\-conf
-Always forces \fBdispatch-conf\fR(1) to be run, where necessary, even if
-not in interactive mode.
+Force \fBdispatch-conf\fR(1) to be run when configuration file updates
+are detected, even in non-interactive mode.
 .TP
 .BR \-C ", " \-\-no\-custom\-updaters
-Do not attempt to run any custom updaters found in
+Do not run custom updaters from
 \fI/etc/genup/updaters.d\fR.
 .TP
 .BR \-d ", " \-\-deploy\-from\-staging
-When a new kernel is available (and, if in interactive mode, you so request)
-\fBgenup\fR will build that new kernel to the staging area in \fI/boot\fR 
-(using \fBbuildkernel\fR(8) with the \fB--stage-only\fR option).
-This ensures that the build can proceed without needing your boot USB key
-(if used) to be inserted, so it can be completed in an unattended context.
-When the \fB--deploy-from-staging\fR option is specified, \fBgenkernel\fR will
-also attempt to deploy the new kernel (if any) at the end of the process
-to your EFI system partition (NB, in
-interactive mode, you will be asked whether you wish to do this anyway).
-
-If you create a new kernel as the result of a \fBgenup\fR run, but do \fInot\fR
-choose to deploy it at the time, you can always do so later by issuing:
-\fBbuildkernel --ask --copy-from-staging\fR.
+Automatically deploy a newly built kernel from the staging area to
+the EFI system partition.
+.TP
+.BR \-\-email
+Send status and error notifications via sendmail to the specified
+recipient list.
+.TP
+.BR \-\-email\-from
+Specify the sender address used for email notifications.
 .TP
 .BR \-e ", " \-\-emerge\-args\=ADDITIONAL_ARGS
-Passes the specified arguments to the main
+Pass additional arguments to the main
 .BR emerge (1)
-invocation. One possible use here is to specify:
-.br
-\fB--emerge-args="--autounmask-write"\fR
-
-This instructs \fBemerge\fR(1) to automatically make any necessary changes to 
-Portage configuration files to ensure that the process can proceed (adding
-additional use flags, allowing libraries, and so on), provided the Portage
-\fB--autounmask\fR option is enabled (which by default it is).
-This can be useful when
-running \fBgenup\fR in an unattended situation (assuming of course you are
-comfortable with such changes being made automatically on your behalf; you
-will of course still get a chance to review any changes made via
-the \fBdispatch-conf\fR(1) mechanism).
-Note also that if you do use this approach, you should also specify
-the \fB--ignore-required-changes\fR option.
+invocation.
 .TP
 .BR \-E ", " \-\-no\-emtee
-Do not attempt to use the \fBemtee\fR(1) tool, even when the
-eponymous USE flag has been enabled.
+Do not attempt to use \fBemtee\fR(1), even if installed.
 .TP
 .BR \-F ", " \-\-no\-fixups
-Do not attempt to run any custom fixups on aarch64, even if the file
-\fI/etc/cron.weekly/fixup\fR is present and executable.
+Do not run \fI/etc/cron.weekly/fixup\fR on aarch64 systems.
 .TP
 .BR \-h ", " \-\-help
-Displays a short help screen, and exits.
+Display a short help screen and exit.
 .TP
 .BR \-i ", " \-\-ignore\-required\-changes
-By default, when running in non-interactive mode, \fBgenup\fR checks to see if
-the \fBemerge @world\fR step would fail due to required user changes
-(to \fI/etc/portage/package.use\fR etc.), and stops with an error if so.
-This option suppresses that check.
-
-Note that specifying this option (in non-interactive mode) can result in cases
-where your \fBgenup\fR run completes successfully, but the \fB@world\fR set
-has \fBnot\fR, in fact, been brought fully up to date.
-
-It has no effect in interactive mode.
+Do not exit with an error if user configuration changes are required
+to complete the @world update in non-interactive mode.
 .TP
 .BR \-k ", " \-\-keep\-old\-distfiles
-By default, \fBgenup\fR will remove any source tarballs that have previously
-been downloaded by Portage, but which do not relate to the installed version of
-any package.
-This option inhibits such cleaning.
+Do not purge unused source tarballs.
+.TP
+.BR \-l ", " \-\-live\-rebuild
+Rebuild packages in the @live-rebuild set (-9999 ebuilds).
 .TP
 .BR \-m ", " \-\-no\-eix\-metadata\-update
-Do not perform an update of the \fBeix\fR metadata at the end-of-run (NB, specifying
-this may cause odd results to be reported when using the \fBeix\fR tool
-subsequently).
+Do not update eix metadata at end-of-run.
 .TP
 .BR \-M ", " \-\-no\-module\-rebuild
-Do not attempt to rebuild external modules by default.
+Do not rebuild external kernel modules.
 .TP
 .BR \-n ", " \-\-no\-kernel\-upgrade
-Do not perform (in non-interactive mode) or offer to perform (in interactive
-mode) a kernel recompile, even should a newer version be available.
-This option is implied if the \fBbuildkernel\fR USE flag is unset.
-
-Note, this does \fBnot\fR itself prevent the update of \fBgentoo-sources\fR (or similar
-package), during the @world \fBemerge\fR(1) step.
+Do not attempt to build or deploy a new kernel.
 .TP
 .BR \-N ", " \-\-no\-nocache
-Do not attempt to use  \fBnocache\fR(1) with \fBeix-sync\fR(1), even when
-the \fBnocache\fR USE flag is set.
+Do not use \fBnocache\fR(1) with repo sync operations.
 .TP
 .BR \-p ", " \-\-no\-perl\-cleaner
-Do not attempt to run \fBperl-cleaner\fR(1) during the process.
+Do not run \fBperl-cleaner\fR(1).
 .TP
 .BR \-r ", " \-\-adjustment\=N
-Specifies the \fBnice\fR(1) adjustment value N (-20<=N<=19) under which
-to run \fBemerge\fR(1) and \fBbuildkernel\fR(8) operations.
-
-If this option is unspecified, the default niceness adjustment value is 19,
-which causes builds to run at the lowest possible
-priority; this is useful to prevent \fBgenup\fR clogging up your
-system. Be careful about using negative values!
+Set niceness adjustment (-20 <= N <= 19) for build operations.
 .TP
 .BR \-S ", " \-\-no\-eix\-sync
-Do not attempt to run \fBeix-sync\fR(1) at the start of the process.
+Do not run repo sync or eix-sync at start of run.
 .TP
 .BR \-v ", " \-\-verbose
-Provides more verbose output from invoked tools, where possible.
+Enable verbose output.
 .TP
 .BR \-V ", " \-\-version
-Displays the version number of \fBgenup\fR, and exits.
-
+Display version number and exit.
 .TP
 .BR \-x ", " \-\-eix\-sync\-args\=ADDITIONAL_ARGS
-Passes the specified arguments to the main
-.BR eix-sync (1)
-invocation. One possible use here is to specify:
-.br
-\fB--eix-sync-args="-q"\fR
-
-This instructs \fBeix-sync\fR(1) to suppress its otherwise verbose output
-(which was the default behaviour of \fBgenup\fR prior to version 1.0.14).
+Pass additional arguments to
+.BR eix-sync (1).
 .SH EXIT STATUS
 The exit status is 0 if the update completed successfully, and 1 otherwise.
 .SH PARALLEL MAKE
-Quite frequently, large \fBemerge\fR(1) runs fail because one
-or more of the invoked ebuilds have problems running with parallel
-\fBmake\fR(1) (as set via MAKEOPTS="-jN", where N>1).
-
-Because of this, \fBgenup\fR will attempt to
-automatically resume any \fBemerge\fR(1) operation with parallel make
-inhibited, should the original operation fail. A warning is issued if this
-happens.
-
-In a similar fashion, if you are using distributed compilation
-with the \fBdistcc\fR and \fBdistcc-pump\fR features, these will be
-automatically inhibited if operations are retried.
+If an \fBemerge\fR(1) operation fails, \fBgenup\fR will attempt to resume
+the build with parallelism restricted (MAKEOPTS=-j1) and distributed
+compilation disabled. A warning is issued if this fallback is required.
 .SH AUTOMATING GENUP
-Should you wish to run \fBgenup\fR automatically, you need to ensure it has
-an appropriate environment.
-For example, you could put the following script in
-\fI/etc/cron.daily/genup\fR, to execute an update nightly (be sure to make
-the file executable):
-.nf
-.RS
-
-#!/bin/bash
-export PATH="/usr/local/sbin:/usr/local/bin:"\\
-"/usr/sbin:/usr/bin:/sbin:/bin:/opt/bin"
-genup >/var/log/latest-genup-run.log 2>&1
-.fi
-.SH EFFECT OF USE FLAGS
-If the \fBbuildkernel\fR USE flag is \fIun\fRset when \fBgenup\fR is emerged
-(it is set by default), then in effect the \fB--no-kernel-upgrade\fR option
-is always forced on, and as such
-\fBgenup\fR will never attempt to call
-\fBbuildkernel\fR(8).
-This makes it suitable for use in an embedded context (where there may
-be no EFI system partition etc.).
-
-If the \fBemtee\fR USE flag is set when \fBgenup\fR is emerged
-(it is \fIun\fRset by default), then the \fB@world\fR update will first be
-attempted using the (often, more efficient) \fBemtee\fR tool. This behaviour
-may always be suppressed by using the \fB--no-emtee\fR option. Note that even when
-\fBemtee\fR \fIis\fR used, and even when it returns successfully, a regular
-\fB@world\fR  \fBemerge\fR will always still be attempted immediately afterwards
-(nomally a relatively rapid no-op, this behaviour ensures all corner cases are
-resoved correctly).
-
-If the \fBnocache\fR USE flag is set when \fBgenup\fR is emerged
-(it is \fIun\fRset by default), then all repo sync steps will be prefixed
-by \fBnocache\fR, which can prevent overswapping etc. on limited
-memory systems. This behaviour may always be suppressed by using the
-\fB--no-nocache\fR option.
-.SH EXTENDING GENUP
-At the end of the main process, \fBgenup\fR will attempt to run any executable
-files found in the \fI/etc/genup/updaters.d\fR directory
-(symlinks to executable files are also OK). You can use this facility to add
-your own custom update steps should you need to do so.
-
-Should any such custom updater exit with a non-zero
-exit status, \fBgenup\fR will also exit (immediately) with a failure code.
-
-Note that you can suppress the running of custom updaters, by passing the
-\fB--no-custom-updaters\fR option to \fBgenup\fR.
-.SH USE WITH WEBRSYNC-GPG
-If you have the webrsync-gpg FEATURE enabled in \fI/etc/portage/make.conf\fR,
-\fBgenup\fR will select the -w option when calling \fBeix-sync\fR.
-Since, in this
-mode, \fBeix-sync\fR does not automatically sync (non-layman) overlays,
-\fBgenup\fR will
-call \fBemaint sync --auto\fR to do this for you, before \fBeix-sync\fR.
-
-As such, you must make sure you have set "auto-sync = no" in
-\fI/etc/portage/repos.conf/gentoo.conf\fR when using the webrsync-gpg FEATURE,
-to prevent \fBemaint sync --auto\fR from also updating the main gentoo repo
-using rsync (which will almost certainly not be what you want).
-
-NB: most users will \fBnot\fR have the webrsync-gpg FEATURE set, and so should ignore
-this note.
+\fBgenup\fR may be run unattended, for example via \fBcron\fR(8).
+Ensure an appropriate PATH is set.
 .SH COPYRIGHT
 .nf
 Copyright \(co 2014-2020 sakaki
@@ -351,8 +237,8 @@ This is free software, you are free to change and redistribute it.
 There is NO WARRANTY, to the extent permitted by law.
 .fi
 .SH AUTHORS
-sakaki \(em send bug reports or comments to <sakaki@deciban.com>
-.SH "SEE ALSO"
+sakaki \- original author
+.SH SEE ALSO
 .BR dispatch-conf (1),
 .BR eclean (1),
 .BR emerge (1),
@@ -361,11 +247,9 @@ sakaki \(em send bug reports or comments to <sakaki@deciban.com>
 .BR eix-sync (1),
 .BR emaint (1),
 .BR nice (1),
-.BR nocache (1),
-.BR make (1),
-.BR python (1),
 .BR perl-cleaner (1),
 .BR buildkernel (8),
+.BR genkernel (8),
 .BR revdep-rebuild (1),
 .BR cron (8),
 .BR portage (5).

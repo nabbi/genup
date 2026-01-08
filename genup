@@ -30,7 +30,7 @@ shopt -s nullglob
 
 # ********************** variables ********************* 
 PROGNAME="$(basename "${0}")"
-VERSION="1.1.0"
+VERSION="1.1.1"
 LOG="/var/log/genup.log"
 ETCPROFILE="/etc/profile"
 UPDATERSDIR="/etc/${PROGNAME}/updaters.d"
@@ -64,8 +64,7 @@ BUILDKERNEL=""
 BUILDKERNELARGS=""
 BOOTMOUNTED=0
 EIXSYNCARGS=""
-PUMP=""
-NOPUMP="-distcc -distcc-pump"
+NODISTCC="-distcc -distcc-pump"
 FALLBACK_SENTINEL="/tmp/.full-emptytree-emerge-performed"
 PORTAGEINFO=""
 PORTAGEFEATURES=""
@@ -93,14 +92,13 @@ if ! tty -s; then
     export TERM="dumb"
 fi
 # store copy of original args, and canonical path to genup itself
-ORIGINAL_ARGS="${@}"
+ORIGINAL_ARGS=("$@")
 SCRIPTPATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
 # ***************** various functions ******************
-check_if_root() {
-    if [ "$EUID" -ne 0 ]; then
-        die "aborting, ran as non-root user or without sudo"
-    fi
+
+have_cmd() {
+    command -v "$1" >/dev/null 2>&1;
 }
 
 send_email() {
@@ -119,32 +117,52 @@ send_email() {
 
     printf 'From: %s\r\nTo: %s\r\nSubject: %s\r\n\r\n%b' \
         "${EMAIL_FROM}" "${EMAIL_TO}" "${subject}" "${body}" | \
-        sendmail -f "${EMAIL_FROM}" ${EMAIL_TO//,/ }
+        sendmail -f "${EMAIL_FROM}" -- ${EMAIL_TO//,/ }
 }
 
-tail_logfile() {
-    # confirm we are all using the same logfile
+email_log_tails() {
+    # Return a short tail of the logfile to stdout (for callers to capture).
+    # Do not print side effects directly to the terminal.
+    #
+    # Output is best-effort and always succeeds (never causes set -e exit).
+
     if [[ ! -f "${LOG}" ]]; then
-        echo "\n\nfile not found: ${LOG}"
-        return
+        printf "file not found: %s\n" "${LOG}"
+        return 0
     fi
 
-    local mtime=$(stat -c %Y ${LOG})
-    local now=$(date +%s)
-    if (( $now - $mtime <= 120 )); then
-        echo "\n\ntailing: ${LOG}\n\n$(tail -n 100 "${LOG}")"
-        return
-    else
-        echo "\n\n${PROGNAME} log appears stale: ${LOG}\nunable to tail events leading up to error"
-        return
+    local mtime now
+    mtime=$(stat -c %Y "${LOG}" 2>/dev/null || true)
+    now=$(date +%s 2>/dev/null || true)
+
+    # If stat/date failed for some reason, still try to tail.
+    if [[ -z "${mtime}" || -z "${now}" ]]; then
+        printf "tailable log (mtime unknown): %s\n" "${LOG}"
+        tail -n 100 "${LOG}" 2>/dev/null || printf "unable to read: %s\n" "${LOG}"
+        return 0
     fi
+
+    if (( now - mtime <= 120 )); then
+        printf "tailable log: %s\n" "${LOG}"
+        tail -n 100 "${LOG}" 2>/dev/null || printf "unable to read: %s\n" "${LOG}"
+    else
+        printf "%s log appears stale: %s\n" "${PROGNAME}" "${LOG}"
+        printf "unable to tail events leading up to error\n"
+    fi
+
+    return 0
 }
 
 set_usepkg() {
     # while getbinpkg support exists if defined in your local make.conf
     #usepkg cannot be defined in FEATURES
     read_portage_info_if_necessary
-    local PKGDIR="$(grep '^PKGDIR=.*' <<<"${PORTAGEINFO}" | sed "s/PKGDIR=//" | sed 's/"//g'  )"
+    local PKGDIR
+    PKGDIR="$(awk -F'"' '/^PKGDIR=/{print $2; exit}' <<<"${PORTAGEINFO}")"
+    if [[ -z "${PKGDIR}" ]]; then
+        warning "Unable to determine PKGDIR from emerge --info; not using binary packages"
+        return
+    fi
     if [[ -f "${PKGDIR}/Packages" ]]; then
         show "Using binary packages found in the locally available packages directory"
         EMERGE_USEPKG="--usepkg"
@@ -185,17 +203,28 @@ die() {
     echo
     echo -e "${RED_TEXT}${PREFIXSTRING}${RESET_ATTS}${PROGNAME}: Error: ${1} - exiting" >&2
 
-    local body+="$(tail_logfile)"
+    local body
+    body="$(email_log_tails)"
 
     send_email "error" "Error: ${1} - exiting\n\n${body}"
     cleanup_and_exit_with_code 1
 }
 
 trap_cleanup() {
-    trap - SIGHUP SIGQUIT SIGINT SIGTERM SIGKILL EXIT
-    die "Caught signal $?"
+    local sig="$1"
+    trap - SIGHUP SIGQUIT SIGINT SIGTERM
+    die "Caught signal ${sig}"
 }
-trap trap_cleanup SIGHUP SIGQUIT SIGINT SIGTERM SIGKILL EXIT
+trap 'trap_cleanup HUP'  SIGHUP
+trap 'trap_cleanup QUIT' SIGQUIT
+trap 'trap_cleanup INT'  SIGINT
+trap 'trap_cleanup TERM' SIGTERM
+
+check_if_root() {
+    if [ "$EUID" -ne 0 ]; then
+        die "aborting, ran as non-root user or without sudo"
+    fi
+}
 
 test_yn() {
     echo -n -e "${SHOWPREFIX}${1} (y/n)? ${SHOWSUFFIX}${ALERT_TEXT}"
@@ -228,7 +257,7 @@ suppress_alert() {
 }
 
 suppress_colour_and_alert_if_output_not_to_a_terminal() {
-    if [ ! -t 1 -o ! -t 2 ]; then
+    if [[ ! -t 1 || ! -t 2 ]]; then
         # we are going to a non-terminal
         suppress_colours
         suppress_alert
@@ -237,7 +266,11 @@ suppress_colour_and_alert_if_output_not_to_a_terminal() {
 
 set_idle_io_priority() {
     # prevent our operations stalling swap
-    ionice -c 3 -p $$
+    if have_cmd ionice; then
+        ionice -c 3 -p $$
+    else
+        warning "ionice not found; skipping idle I/O priority"
+    fi
 }
 
 read_portage_info_if_necessary() {
@@ -256,7 +289,7 @@ update_toolchain () {
     local pkg
     local packages="sys-devel/gcc sys-libs/glibc sys-devel/binutils dev-build/cmake"
     for pkg in $packages; do
-        if emerge --pretend --update ${pkg} | grep -e "^\[ebuild.*U.*\] ${pkg}" > /dev/null 2>&1; then
+        if ${EMERGE} --pretend --update ${pkg} | grep -e "^\[ebuild.*U.*\] ${pkg}" >/dev/null 2>&1; then
             show "Updating ${pkg}"
             ${EMERGE} ${EMERGE_USEPKG} ${VERBOSITYFLAG} --oneshot --update ${pkg}
         fi
@@ -265,32 +298,49 @@ update_toolchain () {
 }
 
 check_gcc_config_and_reset_if_necessary() {
-    # check if gcc-config exists with an error - if it does, then
-    # attempt to set one based on the current gcc version number
-    # see https://wiki.gentoo.org/wiki/Upgrading_GCC
-    if ! gcc-config --get-current-profile >/dev/null 2>&1; then
-        # unset or invalid, attempt to force this to the current gcc
-        # version
-        read_portage_info_if_necessary
-        local CHOST="$(grep '^CHOST=.*' <<<"${PORTAGEINFO}")"
-        CHOST="$(cut -d\" -f2 <<< ${CHOST})"
-        local GCC_VERSION="$(eix --installed --exact sys-devel/gcc --format '<installedversions:NAMEVERSION>' --versionsort | tail -n 1)"
-        GCC_VERSION="${GCC_VERSION##*gcc-}"
-        local FULL_GCC_ID="${CHOST}-${GCC_VERSION}"
-        if gcc-config "${FULL_GCC_ID}"; then
-            warning "gcc configuration was reset"
-            env-update
-            if [ -s "${ETCPROFILE}" ]; then
-                set +e
-                set +u
-                source "${ETCPROFILE}"
-                set -e
-                set -u
-            fi
-            ${EMERGE} ${VERBOSITYFLAG} --oneshot sys-devel/libtool
-        else
-            die "failed to set gcc configuration"
+    # If gcc-config reports no valid current profile, pick one from gcc-config -l.
+    # Avoid hard dependency on eix.
+
+    if gcc-config --get-current-profile >/dev/null 2>&1; then
+        return
+    fi
+
+    if ! have_cmd gcc-config; then
+        die "gcc-config invalid, and gcc-config command not found"
+    fi
+
+    local chosen=""
+    # Prefer the '*' default if present; otherwise pick the last listed profile.
+    chosen="$(gcc-config -l 2>/dev/null | awk '
+        $0 ~ /^[[:space:]]*\[[0-9]+\]/ {
+            # profile id is last field
+            prof = $NF
+            if ($0 ~ /\*/) starred = prof
+            last = prof
+        }
+        END {
+            if (starred != "") print starred
+            else print last
+        }
+    ')"
+
+    if [[ -z "${chosen}" ]]; then
+        die "gcc-config invalid, and no gcc profiles found via gcc-config -l"
+    fi
+
+    if gcc-config "${chosen}"; then
+        warning "gcc configuration was reset"
+        env-update
+        if [ -s "${ETCPROFILE}" ]; then
+            set +e
+            set +u
+            source "${ETCPROFILE}"
+            set -e
+            set -u
         fi
+        ${EMERGE} ${VERBOSITYFLAG} --oneshot sys-devel/libtool
+    else
+        die "failed to set gcc configuration"
     fi
 }
 
@@ -312,7 +362,7 @@ update_portage_tree_and_sync_eix() {
     read_portage_info_if_necessary
     local locations="$(grep -w location <<<"${PORTAGEINFO}" | awk '{ print $2 }' | tr '\n' ' ')"
     for l in ${locations}; do
-        if [ ! -w ${l} ]; then
+        if [ ! -w "${l}" ]; then
             warning "detected read-only path ${l}, not performing eix-sync"
             return
         fi
@@ -330,14 +380,19 @@ update_portage_tree_and_sync_eix() {
         show "(make sure you have auto-sync = no in gentoo.conf)..."
         ${NOCACHE} emaint sync --auto
     fi
-    show "Updating Portage tree and syncing the eix cache"
-    show "(this may take some time)..."
-    # no longer explicitly set -q
-    # (user can still do so via --eix-sync-args)
-    ${NOCACHE} eix-sync ${EIXSYNCARGS}
+
+    if ! have_cmd eix-sync; then
+        warning "eix-sync not found; skipping tree sync"
+    else
+        show "Updating Portage tree and syncing the eix cache"
+        show "(this may take some time)..."
+        # no longer explicitly set -q
+        # (user can still do so via --eix-sync-args)
+        ${NOCACHE} eix-sync ${EIXSYNCARGS}
+    fi
 
     # support legacy layman sync
-    if which layman >/dev/null 2>&1 ; then
+    if have_cmd layman ; then
         local laymanlocation=$(grep -we "^storage" /etc/layman/layman.cfg | awk '{ print $3 }')
         if [ -w ${laymanlocation} ]; then
             layman ${VERBOSITYFLAG} -S
@@ -348,7 +403,7 @@ update_portage_tree_and_sync_eix() {
 }
 
 update_user_patches() {
-    if ((! ARG_NO_EIX_SYNC==0)); then
+    if ((ARG_NO_EIX_SYNC==1)); then
         warning "As requested, skipping user patches git pull"
         return
     fi
@@ -363,25 +418,47 @@ update_user_patches() {
 mount_boot() {
     # check if boot should be mounted or remounted writable
 
-    local fstab=$(grep -e "/boot" /etc/fstab | sed "/^#/d" | wc -l)
-    if ((! ${fstab} >= 1)); then
-        warning "boot not defined in fstab, skipping  remount checks"
+    if ! have_cmd findmnt; then
+        warning "findmnt not found; cannot reliably detect /boot mount state"
+        # best-effort fallback
+        if ! mountpoint -q /boot 2>/dev/null; then
+            show "Mounting /boot"
+            mount /boot
+            BOOTMOUNTED=1
+        fi
         return
     fi
 
-    if [[ ! $(findmnt -M /boot) ]]; then
+    local fstab
+    fstab=$(awk '
+        /^[[:space:]]*#/ { next }
+        NF < 2 { next }
+        $2 == "/boot" { c++ }
+        END { print c+0 }
+    ' /etc/fstab)
+
+    if (( fstab < 1 )); then
+        warning "boot not defined in fstab, skipping remount checks"
+        return
+    fi
+
+    if (( fstab > 1 )); then
+        warning "multiple /boot entries in fstab; using mountpoint checks anyway"
+    fi
+
+    if ! findmnt -rn -M /boot >/dev/null 2>&1; then
         show "Mounting /boot"
         mount -o rw /boot
         BOOTMOUNTED=1
         return
-    elif [[ ! -w /boot ]]; then
-        # check if boot is mounted read-only
+    fi
+
+    if [[ ! -w /boot ]]; then
         show "Re-Mounting /boot writable"
-        mount -o,remount,rw /boot
+        mount -o remount,rw /boot
         BOOTMOUNTED=2
         return
     fi
-
 }
 
 umount_boot() {
@@ -391,9 +468,9 @@ umount_boot() {
         umount /boot
         BOOTMOUNTED=0
         return
-    elif ((BOOTMOUNTED==1)); then
+    elif ((BOOTMOUNTED==2)); then
         show "Re-Mounting /boot read-only"
-        mount -o,remount,ro /boot
+        mount -o remount,ro /boot
         BOOTMOUNTED=0
         return
     fi
@@ -402,8 +479,12 @@ umount_boot() {
 remove_any_prior_emerge_resume_history() {
     # as if we call emerge --resume later, we don't want any hangovers from the
     # previous invocation
-    show "Removing any prior emerge history..."
-    emaint --fix cleanresume
+    if ! have_cmd emaint ; then
+        die "emaint command not found, unable to cleanresume"
+    else
+        show "Removing any prior emerge history..."
+        emaint --fix cleanresume
+    fi
 }
 
 ensure_portage_itself_is_up_to_date() {
@@ -423,7 +504,7 @@ ensure_genup_itself_is_up_to_date() {
     if [[ $("${SCRIPTPATH}" --version) != ${VERSION} ]]; then
         warning "The version of genup has changed!"
         warning "Restarting genup process..."
-        exec "${SCRIPTPATH}" ${ORIGINAL_ARGS}
+        exec "${SCRIPTPATH}" "${ORIGINAL_ARGS[@]}"
     fi
 }
 
@@ -439,7 +520,7 @@ try_emtee_update_if_enabled() {
         show "Attempting to update @world set (for new versions, or changed use flags)"
         show "using emtee..."
         rm -f "${FALLBACK_SENTINEL}"
-        if ${PUMP} emtee ${ASKFLAG} ${ALERTFLAG} ${VERBOSITYFLAG} --emerge-args="${EMERGEARGS} ${EMERGE_USEPKG}" --full-build-fallback-threshold=75; then
+        if emtee ${ASKFLAG} ${ALERTFLAG} ${VERBOSITYFLAG} --emerge-args="${EMERGEARGS} ${EMERGE_USEPKG}" --full-build-fallback-threshold=75; then
             show "emtee run completed successfully!"
         else
             warning "emtee @world build did not complete successfully!"
@@ -465,11 +546,11 @@ update_all_packages_in_world_set_and_dependencies() {
             USER_CHANGES_REQUIRED=1
         fi
     fi
-    if ! ${PUMP} ${EMERGE} ${ASKFLAG} ${ALERTFLAG} ${VERBOSITYFLAG} ${EMERGEARGS} ${EMERGE_USEPKG} --deep \
+    if ! ${EMERGE} ${ASKFLAG} ${ALERTFLAG} ${VERBOSITYFLAG} ${EMERGEARGS} ${EMERGE_USEPKG} --deep \
         --with-bdeps=y --changed-use --update --backtrack=50 --keep-going @world; then
         # per make manpage, if multiple "j" opts are specified, the last
         # one takes precedence, so this is legitimate
-        if MAKEOPTS="${MAKEOPTS-} -j1" FEATURES="${NOPUMP}" ${EMERGE} --resume; then
+        if MAKEOPTS="${MAKEOPTS-} -j1" FEATURES="${NODISTCC}" ${EMERGE} --resume; then
             warning "emerge completed successfully, but only by restricting"
             warning "build parallelism and distcc"
         else
@@ -502,8 +583,8 @@ rebuild_live_packages() {
     fi
 
     show "emerge @live-rebuild -9999 packages"
-    if ! ${PUMP} ${EMERGE} ${VERBOSITYFLAG} @live-rebuild; then
-        if MAKEOPTS="${MAKEOPTS-} -j1" FEATURES="${NOPUMP}" ${EMERGE} --resume; then
+    if ! ${EMERGE} ${VERBOSITYFLAG} @live-rebuild; then
+        if MAKEOPTS="${MAKEOPTS-} -j1" FEATURES="${NODISTCC}" ${EMERGE} --resume; then
             warning "emerge @live-rebuild completed successfully, but only by restricting"
             warning "build parallelism and distcc"
         else
@@ -523,8 +604,8 @@ rebuild_external_modules_if_necessary() {
     # (and may even be binary kernel packages, swept up into the
     # @module-rebuild set as they 'own' kernel modules in
     # /lib/modules/<release>/...)
-    if ! ${PUMP} ${EMERGE} ${VERBOSITYFLAG} @module-rebuild --exclude '*-bin'; then
-        if MAKEOPTS="${MAKEOPTS-} -j1" FEATURES="${NOPUMP}" ${EMERGE} --resume; then
+    if ! ${EMERGE} ${VERBOSITYFLAG} @module-rebuild --exclude '*-bin'; then
+        if MAKEOPTS="${MAKEOPTS-} -j1" FEATURES="${NODISTCC}" ${EMERGE} --resume; then
             warning "emerge @module-rebuild completed successfully, but only by restricting"
             warning "build parallelism and distcc"
         else
@@ -547,8 +628,8 @@ rebuild_packages_depending_on_stale_libraries() {
     # disabled, in case there are any local packages which need rebuilding (and
     # where we need to suppress getbinpkg, otherwise it'll just re-install from the
     # local tbz2)
-    if ! ${PUMP} ${EMERGE} ${EMERGE_USEPKG} ${VERBOSITYFLAG} @preserved-rebuild; then
-        if MAKEOPTS="${MAKEOPTS-} -j1" FEATURES="${NOPUMP}" ${EMERGE} --resume; then
+    if ! ${EMERGE} ${EMERGE_USEPKG} ${VERBOSITYFLAG} @preserved-rebuild; then
+        if MAKEOPTS="${MAKEOPTS-} -j1" FEATURES="${NODISTCC}" ${EMERGE} --resume; then
             warning "emerge @preserved-rebuild completed successfully, but only by restricting"
             warning "build parallelism and distcc"
         else
@@ -556,8 +637,8 @@ rebuild_packages_depending_on_stale_libraries() {
         fi
     fi
     show "Rebuilding again, with getbinpkg suppressed, to catch any local-only packages..."
-    if !  FEATURES="-getbinpkg" ${PUMP} ${EMERGE} ${VERBOSITYFLAG} @preserved-rebuild; then
-        if MAKEOPTS="${MAKEOPTS-} -j1" FEATURES="-getbinpkg ${NOPUMP}" ${EMERGE} --resume; then
+    if !  FEATURES="-getbinpkg" ${EMERGE} ${VERBOSITYFLAG} @preserved-rebuild; then
+        if MAKEOPTS="${MAKEOPTS-} -j1" FEATURES="-getbinpkg ${NODISTCC}" ${EMERGE} --resume; then
             warning "emerge @preserved-rebuild completed successfully, but only by restricting"
             warning "build parallelism and distcc"
         else
@@ -620,13 +701,21 @@ check_if_dispatch_conf_needs_to_be_run() {
     # check if the user has any configuration file changes pending review
     # by dispatch-conf, and set the NEEDSDISPATCHCONF variable accordingly
     # we do a rough check to see if there are any pending changes
-    local DIRS_TO_CHECK="$(emerge --info 2>/dev/null | grep '^CONFIG_PROTECT=' | cut -d"\"" -f2)"
-    local PENDING_CHANGES="$(find ${DIRS_TO_CHECK} -name '*._cfg*' -type f -print)"
-    if [ -n "${PENDING_CHANGES}" ]; then
-        NEEDSDISPATCHCONF=1
-    else
-        NEEDSDISPATCHCONF=0
-    fi
+    local dirs
+    dirs="$(emerge --info 2>/dev/null | grep '^CONFIG_PROTECT=' | cut -d'"' -f2)"
+
+    local pending=""
+    set -f
+    for d in ${dirs}; do
+        if pending=$(find "${d}" -name '*._cfg*' -type f -print -quit 2>/dev/null); then
+            if [[ -n "${pending}" ]]; then
+                NEEDSDISPATCHCONF=1
+                return
+            fi
+        fi
+    done
+    set +f
+    NEEDSDISPATCHCONF=0
 }
 
 interactively_resolve_clashing_config_file_changes() {
@@ -655,8 +744,12 @@ offer_kernel_upgrade_to_staging_if_available() {
     local attempt_upgrade=0
     local CURRENT_KV="$(readlink /usr/src/linux)"
     local LATEST_KV_LINE="$(eselect kernel list | tail -n 1)"
-    local LATEST_KV="$(awk '{print $2}' <<< ${LATEST_KV_LINE})"
+    local LATEST_KV
+    LATEST_KV="$(awk '{print $2}' <<<"${LATEST_KV_LINE}")"
     local LATEST_KV_INDEX="$(cut -d '[' -f 2 <<< ${LATEST_KV_LINE} | cut -d ']' -f 1)"
+
+    local running_base
+    running_base="$(uname -r | sed 's/-.*//')"
 
     if ! grep -q '*' <<< "${LATEST_KV_LINE}"; then
         show "A kernel upgrade is available! You last kernel build source is ${CURRENT_KV}"
@@ -670,7 +763,7 @@ offer_kernel_upgrade_to_staging_if_available() {
             show "  eselect kernel set <n>"
             show "  buildkernel"
         fi
-    elif [[ ! $(grep $(uname -r | sed "s/-.*//") <<< "${CURRENT_KV}") ]]; then
+    elif [[ "${CURRENT_KV}" != *"${running_base}"* ]]; then
         warning "Running kernel does not match kernel build source version"
         warning "Recommended building as it's unclear if that was done"
         if ((ARG_ASK==0)) || test_yn "Would you like to upgrade to ${LATEST_KV}" || "${USE_GENKERNEL}" = true; then
@@ -716,7 +809,7 @@ build_genkernel() {
     fi
 
     # app-admin/eclean-kernel
-    if which eclean-kernel >/dev/null 2>&1 ; then
+    if have_cmd eclean-kernel ; then
         show "Remove old kernel versions"
         eclean-kernel -d -n 2
     else
@@ -724,11 +817,11 @@ build_genkernel() {
     fi
 
     # sys-boot/grub
-    if which grub-mkconfig >/dev/null 2>&1 ; then
+    if have_cmd grub-mkconfig ; then
         show "updating grub.cfg with grub-mkconfig"
         grub-mkconfig -o /boot/grub/grub.cfg
     # sys-boot/lilo
-    elif which lilo >/dev/null 2>&1 ; then
+    elif have_cmd lilo ; then
         show "updating lilo"
         lilo
     else
@@ -782,9 +875,13 @@ update_eix_metadata() {
     # ensure eix metadata is up-to-date (will not be if
     # only non-gentoo repos have changed in this run)
     if ((ARG_NO_EIX_METADATA_UPDATE==0)); then
-        # following does not hit the network
-        show "Updating eix metadata..."
-        eix-sync -0 |& sed -e '/^Processing/d'
+        if have_cmd eix-sync; then
+            # following does not hit the network
+            show "Updating eix metadata..."
+            eix-sync -0 |& sed -e '/^Processing/d'
+        else
+            warning "eix-sync not found; cannot update eix metadata"
+        fi
     else
         warning "As requested, not updating eix metadata"
     fi
@@ -819,11 +916,11 @@ check_webapp_config() {
     # performing a depclean before upgrading the webapps can leave exiting
     # installs broken
 
-    if ! which webapp-config >/dev/null 2>&1 ; then
+    if ! have_cmd webapp-config ; then
         return
     else
        local webapp=$(webapp-config --list-unused-installs)
-       if [[ ! -z ${webapp} ]]; then
+       if [[ -n "${webapp}" ]]; then
             WEBAPP_CONFIG=1
        fi
     fi
@@ -1045,17 +1142,6 @@ check_if_using_webrsync_gpg() {
     fi
 }
 
-check_if_using_distcc() {
-    # check for the relevant feature... turn on PUMP prefix if
-    # we find it
-    read_portage_features_if_necessary
-    if grep -qi "distcc-pump" <<<"${PORTAGEFEATURES}"; then
-        # set prefix for emerge in normal situation...
-        show "Portage feature distcc-pump detected: will pump emerge"
-        PUMP="" # no need for this, will work automatically
-    fi
-}
-
 process_command_line_options() {
     local TEMP
     declare -i RC
@@ -1153,7 +1239,7 @@ process_command_line_options() {
         suppress_alert
     fi
     # check for sakaki-/buildkernel
-    if ! which buildkernel >/dev/null 2>&1 ; then
+    if ! have_cmd buildkernel ; then
         warning "disabling buildkernel, not found"
         USE_BUILDKERNEL=false
     fi
@@ -1161,13 +1247,13 @@ process_command_line_options() {
         NOCACHE=""
     fi
     # check for sakaki-/emtee
-    if ! which emtee >/dev/null 2>&1 ; then
+    if ! have_cmd emtee ; then
         warning "disabling emtee, not found"
         USE_EMTEE=false
     fi
     # disable email if sendmail not found
-    if [[ ! -z ${EMAIL_TO} ]]; then
-        if ! which sendmail >/dev/null 2>&1 ; then
+    if [[ -z "${EMAIL_TO:-}" ]]; then
+        if ! have_cmd sendmail ; then
             warning 'disabling sendmail, not found'
             EMAIL_TO=""
         fi
@@ -1177,7 +1263,7 @@ process_command_line_options() {
         fi
     fi
     # sys-kernel/genkernel
-    if ! which genkernel >/dev/null 2>&1 ; then
+    if ! have_cmd genkernel ; then
         warning "disabling genkernel, not found"
         USE_GENKERNEL=false
     fi
@@ -1201,7 +1287,6 @@ set_idle_io_priority
 process_command_line_options "${@}"
 set_usepkg
 check_if_using_webrsync_gpg
-check_if_using_distcc
 display_greeting
 update_portage_tree_and_sync_eix
 update_user_patches
@@ -1210,10 +1295,12 @@ check_gcc_config_and_reset_if_necessary
 mount_boot
 remove_any_prior_emerge_resume_history
 run_fixups_if_present
+ensure_portage_itself_is_up_to_date
 ensure_genup_itself_is_up_to_date
 try_emtee_update_if_enabled
 update_all_packages_in_world_set_and_dependencies
 rebuild_live_packages
+# intentiall run --depclean twice
 remove_unreferenced_packages
 rebuild_packages_depending_on_stale_libraries
 bring_old_perl_modules_up_to_date
