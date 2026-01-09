@@ -68,11 +68,6 @@ NODISTCC="-distcc -distcc-pump"
 FALLBACK_SENTINEL="/tmp/.full-emptytree-emerge-performed"
 PORTAGEINFO=""
 PORTAGEFEATURES=""
-USE_NOCACHE=false
-NOCACHE=""
-if "${USE_NOCACHE}"; then
-    NOCACHE="nocache"
-fi
 declare -i KERNELBUILT=0 KERNELDEPLOYED=0 NEEDSDISPATCHCONF=0
 declare -i WEBRSYNC=0 WEBAPP_CONFIG=0
 # program arguments (booleans in this case)
@@ -83,7 +78,7 @@ declare -i ARG_NO_PERL_CLEANER=0
 declare -i ARG_NO_EIX_SYNC=0 ARG_ALERT=0
 declare -i ARG_IGNORE_REQUIRED_CHANGES=0 ARG_NO_CUSTOM_UPDATERS=0
 declare -i ARG_NO_FIXUPS=0
-declare -i ARG_NO_EIX_METADATA_UPDATE=0 ARG_NO_NOCACHE=0
+declare -i ARG_NO_EIX_METADATA_UPDATE=0
 declare -i ARG_NO_MODULE_REBUILD=0 ARG_NO_LIVE_REBUILD=1
 declare -i ADJUSTMENT=19
 # force TERM if none found (e.g. when running from cron)
@@ -427,6 +422,7 @@ check_gcc_config_and_reset_if_necessary() {
         if [ -s /etc/profile ]; then
             set +e
             set +u
+            # shellcheck disable=SC1091
             source /etc/profile
             set -e
             set -u
@@ -473,7 +469,7 @@ update_portage_tree_and_sync_eix() {
         # what you want when webrsync-gpg is in use
         show "Running emaint sync --auto to update overlays"
         show "(make sure you have auto-sync = no in gentoo.conf)..."
-        ${NOCACHE} emaint sync --auto
+        emaint sync --auto
     fi
 
     if ! have_cmd eix-sync; then
@@ -483,7 +479,9 @@ update_portage_tree_and_sync_eix() {
         show "(this may take some time)..."
         # no longer explicitly set -q
         # (user can still do so via --eix-sync-args)
-        ${NOCACHE} eix-sync ${EIXSYNCARGS}
+        # Intentionally allow word-splitting in EIXSYNCARGS (user-supplied extra args).
+        # shellcheck disable=SC2086
+        eix-sync ${EIXSYNCARGS}
     fi
 
     # support legacy layman sync
@@ -616,6 +614,8 @@ try_emtee_update_if_enabled() {
         show "Attempting to update @world set (for new versions, or changed use flags)"
         show "using emtee..."
         rm -f "${FALLBACK_SENTINEL}"
+        # Intentionally allow word-splitting in ASKFLAG/ALERTFLAG/VERBOSITYFLAG (may be empty)
+        # shellcheck disable=SC2086
         if emtee ${ASKFLAG} ${ALERTFLAG} ${VERBOSITYFLAG} --emerge-args="${EMERGEARGS} ${EMERGE_USEPKG}" --full-build-fallback-threshold=75; then
             show "emtee run completed successfully!"
         else
@@ -635,6 +635,7 @@ update_all_packages_in_world_set_and_dependencies() {
         # if in non-interactive mode, we'll check first if the build
         # looks possible; you can set the --ignore-required-changes option to
         # suppress this test
+        # shellcheck disable=SC2086
         if grep -qi "The following \(keyword\|mask\|USE\|license\) changes are necessary to proceed" \
             <(${EMERGE} ${VERBOSITYFLAG} ${EMERGEARGS} ${EMERGE_USEPKG} --pretend --deep \
             --with-bdeps=y --changed-use --update --backtrack=50 --keep-going @world 2>&1 || true); then
@@ -642,6 +643,7 @@ update_all_packages_in_world_set_and_dependencies() {
             USER_CHANGES_REQUIRED=1
         fi
     fi
+    # shellcheck disable=SC2086
     if ! ${EMERGE} ${ASKFLAG} ${ALERTFLAG} ${VERBOSITYFLAG} ${EMERGEARGS} ${EMERGE_USEPKG} --deep \
         --with-bdeps=y --changed-use --update --backtrack=50 --keep-going @world; then
         # per make manpage, if multiple "j" opts are specified, the last
@@ -806,6 +808,7 @@ check_if_dispatch_conf_needs_to_be_run() {
         if pending=$(find "${d}" -name '*._cfg*' -type f -print -quit 2>/dev/null); then
             if [[ -n "${pending}" ]]; then
                 NEEDSDISPATCHCONF=1
+                set +f
                 return
             fi
         fi
@@ -903,6 +906,7 @@ offer_kernel_upgrade_to_staging_if_available() {
         if [[ "${USE_BUILDKERNEL}" == "true" ]]; then
             show "Entering buildkernel (stage-only)..."
             # builds into staging in /boot; no removable media needed
+            # shellcheck disable=SC2086
             ${BUILDKERNEL} ${ASKFLAG} ${ALERTFLAG} ${VERBOSITYFLAG} ${BUILDKERNELARGS} --stage-only
             KERNELBUILT=1
         elif [[ "${USE_GENKERNEL}" == "true" ]]; then
@@ -1203,8 +1207,6 @@ Options:
   -n, --no-kernel-upgrade
                         do not attempt to run buildkernel (implied if
                         buildkernel USE flag has not been set)
-  -N, --no-nocache      do not attempt to use nocache with eix-sync, even
-                        when the nocache USE flag has been set
   -p, --no-perl-cleaner do not attempt to run perl-cleaner
   -r, --adjustment=N    add integer N to the build niceness -20<=N<=19
                         (the default is 19, running builds at lowest possible
@@ -1279,7 +1281,7 @@ process_command_line_options() {
     declare -i RC
 
     local short_opts="aAb:cCde:EFhiklmMnNpr:SvVx:"
-    local long_opts="ask,alert,compiler:,email:,email-from:,buildkernel-args:,dispatch-conf,no-custom-updaters,deploy-from-staging,emerge-args:,no-emtee,no-fixups,help,ignore-required-changes,keep-old-distfiles,no-eix-metadata-update,live-rebuild,no-module-rebuild,no-kernel-upgrade,no-nocache,no-perl-cleaner,adjustment:,no-eix-sync,verbose,version,eix-sync-args:"
+    local long_opts="ask,alert,compiler:,email:,email-from:,buildkernel-args:,dispatch-conf,no-custom-updaters,deploy-from-staging,emerge-args:,no-emtee,no-fixups,help,ignore-required-changes,keep-old-distfiles,no-eix-metadata-update,live-rebuild,no-module-rebuild,no-kernel-upgrade,no-perl-cleaner,adjustment:,no-eix-sync,verbose,version,eix-sync-args:"
 
     set +e
     TEMP="$(getopt \
@@ -1331,7 +1333,6 @@ process_command_line_options() {
             -m|--no-eix-metadata-update) ARG_NO_EIX_METADATA_UPDATE=1 ; shift ;;
             -M|--no-module-rebuild) ARG_NO_MODULE_REBUILD=1 ; shift ;;
             -n|--no-kernel-upgrade) ARG_NO_KERNEL_UPGRADE=1 ; shift ;;
-            -N|--no-nocache) ARG_NO_NOCACHE=1 ; shift ;;
             -p|--no-perl-cleaner) ARG_NO_PERL_CLEANER=1 ; shift ;;
             -r|--adjustment)
                 case "${2}" in
@@ -1393,9 +1394,6 @@ process_command_line_options() {
     if ! have_cmd buildkernel ; then
         warning "disabling buildkernel, not found"
         USE_BUILDKERNEL=false
-    fi
-    if ((ARG_NO_NOCACHE==1)); then
-        NOCACHE=""
     fi
     # check for sakaki-/emtee
     if ! have_cmd emtee ; then
