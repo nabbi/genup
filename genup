@@ -32,7 +32,6 @@ shopt -s nullglob
 PROGNAME="$(basename "${0}")"
 VERSION="1.1.2"
 LOG="/var/log/genup.log"
-ETCPROFILE="/etc/profile"
 UPDATERSDIR="/etc/${PROGNAME}/updaters.d"
 FIXUPSCRIPT="/etc/cron.weekly/fixup"
 RED_TEXT="" GREEN_TEXT="" YELLOW_TEXT="" RESET_ATTS="" ALERT_TEXT=""
@@ -178,9 +177,10 @@ send_email() {
         return
     fi
 
-    local subject="${PROGNAME} :: $(hostname) :: $1"
-    local body=""
-    body+="$(hostname)\n"
+    local subject body
+    subject="${PROGNAME} :: $(hostname) :: $1"
+    
+    body="\n$(hostname)\n"
     body+="$(date)\n"
     body+="$(uptime)\n"
     #body+="$(eselect profile list | grep "*" | awk '{ print $2 }')\n\n"
@@ -188,7 +188,7 @@ send_email() {
 
     printf 'From: %s\r\nTo: %s\r\nSubject: %s\r\n\r\n%b' \
         "${EMAIL_FROM}" "${EMAIL_TO}" "${subject}" "${body}" | \
-        sendmail -f "${EMAIL_FROM}" -- ${EMAIL_TO//,/ }
+        sendmail -f "${EMAIL_FROM}" -- "${EMAIL_TO//,/ }"
 }
 
 email_log_tails() {
@@ -245,7 +245,7 @@ set_usepkg() {
 cleanup_and_exit_with_code() {
     # add any cleanup code here
     trap - EXIT
-    exit $1
+    exit "$1"
 }
 
 show() {
@@ -281,15 +281,18 @@ die() {
     cleanup_and_exit_with_code 1
 }
 
+# shellcheck disable=SC2317  # called indirectly via trap
 trap_cleanup() {
-    local sig="$1"
-    trap - SIGHUP SIGQUIT SIGINT SIGTERM
+    local sig
+    sig="$1"
+    trap - HUP QUIT INT TERM
     die "Caught signal ${sig}"
 }
-trap 'trap_cleanup HUP'  SIGHUP
-trap 'trap_cleanup QUIT' SIGQUIT
-trap 'trap_cleanup INT'  SIGINT
-trap 'trap_cleanup TERM' SIGTERM
+
+trap 'trap_cleanup HUP'  HUP
+trap 'trap_cleanup QUIT' QUIT
+trap 'trap_cleanup INT'  INT
+trap 'trap_cleanup TERM' TERM
 
 check_if_root() {
     if [ "$EUID" -ne 0 ]; then
@@ -421,10 +424,10 @@ check_gcc_config_and_reset_if_necessary() {
     if gcc-config "${chosen}"; then
         warning "gcc configuration was reset"
         env-update
-        if [ -s "${ETCPROFILE}" ]; then
+        if [ -s /etc/profile ]; then
             set +e
             set +u
-            source "${ETCPROFILE}"
+            source /etc/profile
             set -e
             set -u
         fi
@@ -451,7 +454,8 @@ update_portage_tree_and_sync_eix() {
 
     # Check if portage or overlays are on read-only mount (ie NFS)
     read_portage_info_if_necessary
-    local locations="$(grep -w location <<<"${PORTAGEINFO}" | awk '{ print $2 }' | tr '\n' ' ')"
+    local locations
+    locations="$(grep -w location <<<"${PORTAGEINFO}" | awk '{ print $2 }' | tr '\n' ' ')"
     for l in ${locations}; do
         if [ ! -w "${l}" ]; then
             warning "detected read-only path ${l}, not performing eix-sync"
@@ -484,8 +488,9 @@ update_portage_tree_and_sync_eix() {
 
     # support legacy layman sync
     if have_cmd layman ; then
-        local laymanlocation=$(grep -we "^storage" /etc/layman/layman.cfg | awk '{ print $3 }')
-        if [ -w ${laymanlocation} ]; then
+        local laymanlocation
+        laymanlocation=$(grep -we "^storage" /etc/layman/layman.cfg | awk '{ print $3 }')
+        if [ -w "${laymanlocation}" ]; then
             layman ${VERBOSITYFLAG} -S
         else
             warning "detected read-only layman path ${laymanlocation}, not performing layman sync"
@@ -592,7 +597,7 @@ ensure_genup_itself_is_up_to_date() {
     ${EMERGE} ${VERBOSITYFLAG} --oneshot app-portage/genup
     # if the above caused the version of genup to change, exec ourselves
     # for a full restart
-    if [[ $("${SCRIPTPATH}" --version) != ${VERSION} ]]; then
+    if [[ $("${SCRIPTPATH}" --version) != "${VERSION}" ]]; then
         warning "The version of genup has changed!"
         warning "Restarting genup process..."
         exec "${SCRIPTPATH}" "${ORIGINAL_ARGS[@]}"
@@ -605,7 +610,7 @@ try_emtee_update_if_enabled() {
     # resource intensive in some update situations (and can
     # also sometimes compute a successful update in cases where
     # a vanilla emerge -DuU --with-bdeps=y @world fails)
-    if "${USE_EMTEE}" = true; then
+    if [[ "${USE_EMTEE}" == true ]]; then
         # this is allowed to fail, since we'll try a full @world
         # emerge afterwards anyhow
         show "Attempting to update @world set (for new versions, or changed use flags)"
@@ -828,58 +833,89 @@ interactively_resolve_clashing_config_file_changes() {
 
 offer_kernel_upgrade_to_staging_if_available() {
     # we may have been instructed not to do this...
-    if ((ARG_NO_KERNEL_UPGRADE==1)); then
-        return
+    if (( ARG_NO_KERNEL_UPGRADE == 1 )); then
+        return 0
     fi
 
-    local attempt_upgrade=0
-    local CURRENT_KV="$(readlink /usr/src/linux)"
-    local LATEST_KV_LINE="$(eselect kernel list | tail -n 1)"
-    local LATEST_KV
-    LATEST_KV="$(awk '{print $2}' <<<"${LATEST_KV_LINE}")"
-    local LATEST_KV_INDEX="$(cut -d '[' -f 2 <<< ${LATEST_KV_LINE} | cut -d ']' -f 1)"
+    local current_kv running_base
+    local sel_kv last_idx last_kv
+    local do_upgrade=0
 
-    local running_base
+    current_kv="$(readlink /usr/src/linux 2>/dev/null || true)"
     running_base="$(uname -r | sed 's/-.*//')"
 
-    if ! grep -q '*' <<< "${LATEST_KV_LINE}"; then
-        show "A kernel upgrade is available! You last kernel build source is ${CURRENT_KV}"
-        if ((ARG_ASK==0)) || test_yn "Would you like to upgrade to ${LATEST_KV}" || "${USE_GENKERNEL}" = true; then
-            show "Setting up new kernel in staging..."
-            eselect kernel set "${LATEST_KV_INDEX}"
-            attempt_upgrade=1
+    # Parse eselect kernel list once:
+    # Output: <sel_idx> <sel_kv> <last_idx> <last_kv>
+    read -r _ sel_kv last_idx last_kv < <(
+        eselect kernel list 2>/dev/null | awk '
+            $1 ~ /^\[[0-9]+\]$/ {
+                idx=$1; gsub(/^\[/,"",idx); gsub(/\]$/,"",idx)
+                kv=$2
+                last_idx=idx; last_kv=kv
+                if ($0 ~ /\*$/) { sel_idx=idx; sel_kv=kv }
+            }
+            END {
+                # If no "*" line was seen, sel_* may be empty; still print.
+                printf "%s %s %s %s\n", sel_idx, sel_kv, last_idx, last_kv
+            }
+        '
+    )
+
+    if [[ -z "${current_kv}" || -z "${last_kv}" || -z "${last_idx}" ]]; then
+        warning "Unable to determine current/latest kernel sources (readlink/eselect failed)."
+        return 0
+    fi
+
+    # Upgrade exists if the latest symlink target differs from the selected one.
+    if [[ "${sel_kv}" != "${last_kv}" ]]; then
+        show "A kernel upgrade is available."
+        show "Current build source: ${current_kv}"
+        show "Latest available:     ${last_kv} (eselect index ${last_idx})"
+
+        if (( ARG_ASK == 0 )) || [[ "${USE_GENKERNEL}" == "true" ]] || test_yn "Upgrade kernel sources to ${last_kv} and stage a build?"; then
+            show "Setting up new kernel sources..."
+            eselect kernel set "${last_idx}"
+            do_upgrade=1
         else
-            show "OK, leaving your kernel as is, to upgrade subsequently, issue:"
+            show "OK, leaving kernel sources as-is. To upgrade later:"
             show "  eselect kernel list"
             show "  eselect kernel set <n>"
             show "  buildkernel"
+            return 0
         fi
-    elif [[ "${CURRENT_KV}" != *"${running_base}"* ]]; then
-        warning "Running kernel does not match kernel build source version"
-        warning "Recommended building as it's unclear if that was done"
-        if ((ARG_ASK==0)) || test_yn "Would you like to upgrade to ${LATEST_KV}" || "${USE_GENKERNEL}" = true; then
-            attempt_upgrade=1
+    elif [[ "${current_kv}" != *"${running_base}"* ]]; then
+        warning "Running kernel does not match kernel build source version."
+        warning "Running: $(uname -r)"
+        warning "Source:  ${current_kv}"
+        warning "Recommended to rebuild (stage-only) to ensure consistency."
+
+        if (( ARG_ASK == 0 )) || [[ "${USE_GENKERNEL}" == "true" ]] || test_yn "Stage a kernel rebuild now?"; then
+            do_upgrade=1
+        else
+            return 0
         fi
     else
-        show "Your kernel (${CURRENT_KV}) is the latest version available!"
-        return
+        show "Your kernel sources (${current_kv}) are already the latest available."
+        return 0
     fi
 
-    if ((attempt_upgrade==1)); then
-        if [[ "${USE_BUILDKERNEL}" = true ]]; then
-            show "Entering buildkernel..."
-            # following does not require your USB key to be inserted, as it
-            # only builds to staging in /boot...
+    if (( do_upgrade == 1 )); then
+        if [[ "${USE_BUILDKERNEL}" == "true" ]]; then
+            show "Entering buildkernel (stage-only)..."
+            # builds into staging in /boot; no removable media needed
             ${BUILDKERNEL} ${ASKFLAG} ${ALERTFLAG} ${VERBOSITYFLAG} ${BUILDKERNELARGS} --stage-only
             KERNELBUILT=1
-        elif [[ "${USE_GENKERNEL}" = true ]]; then
+        elif [[ "${USE_GENKERNEL}" == "true" ]]; then
             build_genkernel
             KERNELBUILT=1
         else
-            warning "Welp. Kernel upgrade is aviable but we were unable to attempt building it for you."
+            warning "Kernel upgrade/rebuild requested, but no builder is enabled (USE_BUILDKERNEL/USE_GENKERNEL)."
         fi
     fi
+
+    return 0
 }
+
 
 build_genkernel() {
     # the caller function should have these checks too but keeping them incase process changes
@@ -947,7 +983,7 @@ copy_new_kernel_from_staging_if_present_and_desired() {
                 DO_KERNELDEPLOY=1
             fi
         fi
-        if [[ $DO_KERNELDEPLOY==1 ]]; then
+        if [[ $DO_KERNELDEPLOY == 1 ]]; then
             show "Copying new kernel from staging..."
             buildkernel ${ASKFLAG} ${ALERTFLAG} ${VERBOSITYFLAG} --copy-from-staging
             KERNELDEPLOYED=1
@@ -1010,7 +1046,8 @@ check_webapp_config() {
     if ! have_cmd webapp-config ; then
         return
     else
-       local webapp=$(webapp-config --list-unused-installs)
+       local webapp
+       webapp=$(webapp-config --list-unused-installs)
        if [[ -n "${webapp}" ]]; then
             WEBAPP_CONFIG=1
        fi
@@ -1040,7 +1077,7 @@ display_final_status() {
         else
             warning "Huh. We might have build a kernel but have no idea what happened to it"
         fi
-    elif [[ $ARG_NO_KERNEL_UPGRADE==0 && "$USE_BUILDKERNEL" = true ]] ; then
+    elif [[ $ARG_NO_KERNEL_UPGRADE == 0 && "$USE_BUILDKERNEL" = true ]] ; then
         if buildkernel --is-new-kernel-available; then
             warning "You are currently running with an older kernel"
             warning "When ready, ensure you have copied the new version"
@@ -1062,7 +1099,7 @@ display_final_status() {
         show
         warning "There are configuration file changes pending review!"
         warning "Please run dispatch-conf to interactively resolve them."
-        if "${USE_EMTEE}" = true && [[ -f "${FALLBACK_SENTINEL}" ]]; then
+        if [[ "${USE_EMTEE}" == true && -f "${FALLBACK_SENTINEL}" ]]; then
             rm -f "${FALLBACK_SENTINEL}"
             warning "  TAKE CARE: a full --emptytree @world emerge has been performed;"
             warning "  you may need to retain your current version of many"
@@ -1075,14 +1112,16 @@ display_final_status() {
         show "There are no configuration file changes pending review."
     fi
 
-    local glsa=$(glsa-check -t all 2>&1)
+    local glsa
+    glsa=$(glsa-check -t all 2>&1)
     if ! grep -q "system is not affected" <<< "${glsa}"; then
         show
         show "${glsa}"
         body+="${glsa}\n\n"
     fi
 
-    local news=$(eselect news list new)
+    local news
+    news=$(eselect news list new)
     if ! grep -q "none found" <<< "${news}"; then
         show
         show "${news}"
@@ -1090,7 +1129,8 @@ display_final_status() {
     fi
 
     if ((WEBAPP_CONFIG==1)); then
-        local webapp=$(webapp-config --list-unused-installs)
+        local webapp
+        webapp=$(webapp-config --list-unused-installs)
         show
         show "There are unused webapp installs"
         show "${webapp}"
@@ -1107,7 +1147,7 @@ display_final_status() {
     show "All done - your system is now up-to-date!"
     show "$(date)"
 
-    if [[ ! -z ${body} ]]; then
+    if [[ -n ${body} ]]; then
         send_email "${subject}" "${body}"
     fi
 }
@@ -1190,7 +1230,7 @@ print_version() {
 }
 
 display_usage_message_and_bail_out() {
-    if [ ! -z "${1+x}" ]; then
+    if [ -n "${1+x}" ]; then
         printf "%s: %s\n" "${PROGNAME}" "${1}" >&2
     fi
     print_usage >&2
@@ -1200,7 +1240,7 @@ display_usage_message_and_bail_out() {
 internal_consistency_option_checks() {
     # following not exhaustive, just some more obvious snafus
     local KERNMSG="--no-kernel-upgrade"
-    if "${USE_BUILDKERNEL}" = false; then
+    if [[ "${USE_BUILDKERNEL}" == false ]]; then
         KERNMSG="buildkernel USE flag unset"
     fi
     if ((ARG_NO_KERNEL_UPGRADE==1)); then
