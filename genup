@@ -24,6 +24,7 @@
 
 set -e
 set -u
+set -o pipefail
 shopt -s nullglob
 
 # Scroll to the bottom of this script to follow the main program flow.
@@ -34,14 +35,23 @@ VERSION="1.1.2"
 LOG="/var/log/genup.log"
 UPDATERSDIR="/etc/${PROGNAME}/updaters.d"
 FIXUPSCRIPT="/etc/cron.weekly/fixup"
+
 RED_TEXT="" GREEN_TEXT="" YELLOW_TEXT="" RESET_ATTS="" ALERT_TEXT=""
-if [[ -v TERM && -n "${TERM}" && "${TERM}" != "dumb" ]]; then
-    RED_TEXT="$(tput setaf 1)$(tput bold)"
-    GREEN_TEXT="$(tput setaf 2)$(tput bold)"
-    YELLOW_TEXT="$(tput setaf 3)$(tput bold)"
-    RESET_ATTS="$(tput sgr0)"
-    ALERT_TEXT="$(tput bel)"
+
+# If not running on a tty (cron), force TERM=dumb so builds that consult TERM don't fail.
+if ! tty -s; then
+    export TERM="dumb"
+else
+    # On a tty, only try colors if TERM is set and not dumb.
+    if [[ -n "${TERM:-}" && "${TERM}" != "dumb" ]]; then
+        RED_TEXT="$(tput setaf 1 2>/dev/null || true)$(tput bold 2>/dev/null || true)"
+        GREEN_TEXT="$(tput setaf 2 2>/dev/null || true)$(tput bold 2>/dev/null || true)"
+        YELLOW_TEXT="$(tput setaf 3 2>/dev/null || true)$(tput bold 2>/dev/null || true)"
+        RESET_ATTS="$(tput sgr0 2>/dev/null || true)"
+        ALERT_TEXT="$(tput bel 2>/dev/null || true)"
+    fi
 fi
+
 declare -i VERBOSITY=1
 PREFIXSTRING="* "
 SHOWPREFIX="${GREEN_TEXT}${PREFIXSTRING}${RESET_ATTS}"
@@ -81,11 +91,7 @@ declare -i ARG_NO_FIXUPS=0
 declare -i ARG_NO_EIX_METADATA_UPDATE=0
 declare -i ARG_NO_MODULE_REBUILD=0 ARG_NO_LIVE_REBUILD=1
 declare -i ADJUSTMENT=19
-# force TERM if none found (e.g. when running from cron)
-# otherwise mach builds (firefox etc.) will fail
-if ! tty -s; then
-    export TERM="dumb"
-fi
+
 # store copy of original args, and canonical path to genup itself
 ORIGINAL_ARGS=("$@")
 SCRIPTPATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
@@ -94,6 +100,18 @@ SCRIPTPATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOU
 
 have_cmd() {
     command -v "$1" >/dev/null 2>&1;
+}
+
+is_integer() {
+    [[ "${1:-}" =~ ^-?[0-9]+$ ]]
+}
+
+reject_newlines() {
+    # returns 0 if safe, 1 if contains CR/LF
+    case "${1-}" in
+        *$'\n'*|*$'\r'*) return 1 ;;
+    esac
+    return 0
 }
 
 get_portage_envvar() {
@@ -168,18 +186,18 @@ detect_selected_compiler() {
 
 send_email() {
     #check if generating mail events was configured
-    if [[ -z ${EMAIL_TO} ]]; then
+    if [[ -z "${EMAIL_TO:-}" ]]; then
         return
     fi
 
     local subject body
-    subject="${PROGNAME} :: $(hostname) :: $1"
+    subject="${PROGNAME} :: $(hostname) :: ${1:-}"
     
     body="\n$(hostname)\n"
     body+="$(date)\n"
     body+="$(uptime)\n"
-    #body+="$(eselect profile list | grep "*" | awk '{ print $2 }')\n\n"
-    body+="\n\n${2}"
+    # body+="$(eselect profile list | grep "*" | awk '{ print $2 }')\n\n"
+    body+="\n\n${2:-}"
 
     printf 'From: %s\r\nTo: %s\r\nSubject: %s\r\n\r\n%b' \
         "${EMAIL_FROM}" "${EMAIL_TO}" "${subject}" "${body}" | \
@@ -246,8 +264,8 @@ cleanup_and_exit_with_code() {
 show() {
     local MESSAGE=${1:-""}
     local VERBLEVEL=${2:-${VERBOSITY}}
-    if (( VERBLEVEL >=1 )); then
-        echo -e "${SHOWPREFIX}${MESSAGE}${SHOWSUFFIX}"
+    if (( VERBLEVEL >= 1 )); then
+        printf "%b\n" "${SHOWPREFIX}${MESSAGE}${SHOWSUFFIX}"
     fi
 }
 
@@ -257,22 +275,21 @@ alertshow() {
     if ((ARG_ALERT==0)); then
         show "${@}"
     elif (( VERBLEVEL >=1 )); then
-        echo -e "${SHOWPREFIX}${MESSAGE}${SHOWSUFFIX}${ALERT_TEXT}"
+        printf "%b\n" "${SHOWPREFIX}${MESSAGE}${SHOWSUFFIX}${ALERT_TEXT}"
     fi
 }
 
 warning() {
-    echo -e "${YELLOW_TEXT}${PREFIXSTRING}${RESET_ATTS}${PROGNAME}: Warning: ${1}" >&2
+    printf "%b\n" "${YELLOW_TEXT}${PREFIXSTRING}${RESET_ATTS}${PROGNAME}: Warning: ${1:-}" >&2
 }
 
 die() {
-    echo
-    echo -e "${RED_TEXT}${PREFIXSTRING}${RESET_ATTS}${PROGNAME}: Error: ${1} - exiting" >&2
+    printf "\n" >&2
+    printf "%b\n" "${RED_TEXT}${PREFIXSTRING}${RESET_ATTS}${PROGNAME}: Error: ${1:-} - exiting" >&2
 
     local body
     body="$(email_log_tails)"
-
-    send_email "error" "Error: ${1} - exiting\n\n${body}"
+    send_email "error" "Error: ${1:-} - exiting\n\n${body}"
     cleanup_and_exit_with_code 1
 }
 
@@ -296,9 +313,9 @@ check_if_root() {
 }
 
 test_yn() {
-    echo -n -e "${SHOWPREFIX}${1} (y/n)? ${SHOWSUFFIX}${ALERT_TEXT}"
+    printf "%b\n" "${SHOWPREFIX}${1} (y/n)? ${SHOWSUFFIX}${ALERT_TEXT}"
     read -r -n 1
-    echo
+    printf "%b\n" ""
     if [[ ${REPLY} =~ ^[Yy]$ ]]; then
         return 0
     else
@@ -308,7 +325,7 @@ test_yn() {
 
 continue_yn() {
     if ! test_yn "${1}"; then
-        echo -e "${RED_TEXT}${PREFIXSTRING}${RESET_ATTS}Quitting" >&2
+        printf "%b\n" "${RED_TEXT}${PREFIXSTRING}${RESET_ATTS}Quitting" >&2
         cleanup_and_exit_with_code 1
     fi
 }
@@ -345,7 +362,7 @@ set_idle_io_priority() {
 read_portage_info_if_necessary() {
     if [ -z "${PORTAGEINFO}" ]; then
         show "Checking Portage configuration, please wait..."
-        PORTAGEINFO="$(emerge --info)"
+        PORTAGEINFO="$(${EMERGE} --info)"
     fi
 }
 
@@ -376,8 +393,11 @@ update_toolchain () {
 
     local pkg
     for pkg in ${base_packages} ${compiler_packages}; do
-        if ${EMERGE} --pretend --update "${pkg}" 2>/dev/null | \
-        grep -Eq "^\[ebuild[[:space:]]+[^]]*\][[:space:]]+${pkg}([:-]|$)"; then
+        if ${EMERGE} -p --oneshot --update "${pkg}" 2>/dev/null | awk '
+            # emerge -p lines we care about start like: [ebuild  U  ] category/pkg-version
+            $1 ~ /^\[ebuild/ { found=1 }
+            END { exit(found ? 0 : 1) }
+        '; then
             show "Updating ${pkg}"
             ${EMERGE} ${EMERGE_USEPKG} ${VERBOSITYFLAG} --oneshot --update "${pkg}"
         fi
@@ -410,7 +430,7 @@ check_gcc_config_and_reset_if_necessary() {
             if (starred != "") print starred
             else print last
         }
-    ')"
+    ' || true)"
 
     if [[ -z "${chosen}" ]]; then
         die "gcc-config invalid, and no gcc profiles found via gcc-config -l"
@@ -451,7 +471,7 @@ update_portage_tree_and_sync_eix() {
     # Check if portage or overlays are on read-only mount (ie NFS)
     read_portage_info_if_necessary
     local locations
-    locations="$(grep -w location <<<"${PORTAGEINFO}" | awk '{ print $2 }' | tr '\n' ' ')"
+    locations="$(grep -w location <<<"${PORTAGEINFO}" | awk '{ print $2 }' | tr '\n' ' ' || true)"
     for l in ${locations}; do
         if [ ! -w "${l}" ]; then
             warning "detected read-only path ${l}, not performing eix-sync"
@@ -487,7 +507,7 @@ update_portage_tree_and_sync_eix() {
     # support legacy layman sync
     if have_cmd layman ; then
         local laymanlocation
-        laymanlocation=$(grep -we "^storage" /etc/layman/layman.cfg | awk '{ print $3 }')
+        laymanlocation=$(grep -we "^storage" /etc/layman/layman.cfg | awk '{ print $3 }' || true)
         if [ -w "${laymanlocation}" ]; then
             layman ${VERBOSITYFLAG} -S
         else
@@ -504,8 +524,10 @@ update_user_patches() {
 
     # if portage user patches is a git repo, refresh it
     if [ -d /etc/portage/patches/.git ]; then
-        show "You've been hacking. Updating portage user patches."
-        git -C /etc/portage/patches/ pull
+        if have_cmd git ; then
+            show "You've been hacking. Updating portage user patches."
+            git -C /etc/portage/patches/ pull
+        fi
     fi
 }
 
@@ -696,6 +718,9 @@ rebuild_external_modules_if_necessary() {
     if ((ARG_NO_MODULE_REBUILD==1)); then
         return
     fi
+    if ((KERNELBUILT==0)); then
+        return
+    fi
     show "Creating any necessary external modules (e.g., VirtualBox)..."
     # exclude packages ending in '-bin'... by convention, these are binary
     # packages which means they aren't going to rebuild anything
@@ -750,8 +775,10 @@ bring_old_perl_modules_up_to_date() {
     # automatically rebuilt when perl upgrades to a higher version - the
     # below script fixes this
     if ((ARG_NO_PERL_CLEANER==0)); then
-        show "Ensuring perl modules are matched to current version of perl..."
-        perl-cleaner ${VERBOSITYFLAG} --all
+        if have_cmd perl-cleaner; then
+            show "Ensuring perl modules are matched to current version of perl..."
+            perl-cleaner ${VERBOSITYFLAG} --all
+        fi
     fi
 }
 
@@ -800,7 +827,7 @@ check_if_dispatch_conf_needs_to_be_run() {
     # by dispatch-conf, and set the NEEDSDISPATCHCONF variable accordingly
     # we do a rough check to see if there are any pending changes
     local dirs
-    dirs="$(emerge --info 2>/dev/null | grep '^CONFIG_PROTECT=' | cut -d'"' -f2)"
+    dirs="$(${EMERGE} --info 2>/dev/null | grep '^CONFIG_PROTECT=' | cut -d'"' -f2 || true)"
 
     local pending=""
     set -f
@@ -845,7 +872,7 @@ offer_kernel_upgrade_to_staging_if_available() {
     local do_upgrade=0
 
     current_kv="$(readlink /usr/src/linux 2>/dev/null || true)"
-    running_base="$(uname -r | sed 's/-.*//')"
+    running_base="$(uname -r | sed 's/-.*//' || true)"
 
     # Parse eselect kernel list once:
     # Output: <sel_idx> <sel_kv> <last_idx> <last_kv>
@@ -989,7 +1016,7 @@ copy_new_kernel_from_staging_if_present_and_desired() {
         fi
         if [[ $DO_KERNELDEPLOY == 1 ]]; then
             show "Copying new kernel from staging..."
-            buildkernel ${ASKFLAG} ${ALERTFLAG} ${VERBOSITYFLAG} --copy-from-staging
+            ${BUILDKERNEL} ${ASKFLAG} ${ALERTFLAG} ${VERBOSITYFLAG} --copy-from-staging
             KERNELDEPLOYED=1
         fi
     fi
@@ -1009,7 +1036,7 @@ update_eix_metadata() {
         if have_cmd eix-sync; then
             # following does not hit the network
             show "Updating eix metadata..."
-            eix-sync -0 |& sed -e '/^Processing/d'
+            eix-sync -0 |& sed -e '/^Processing/d' || true 
         else
             warning "eix-sync not found; cannot update eix metadata"
         fi
@@ -1082,7 +1109,7 @@ display_final_status() {
             warning "Huh. We might have build a kernel but have no idea what happened to it"
         fi
     elif [[ $ARG_NO_KERNEL_UPGRADE == 0 && "$USE_BUILDKERNEL" = true ]] ; then
-        if buildkernel --is-new-kernel-available; then
+        if ${BUILDKERNEL} --is-new-kernel-available; then
             warning "You are currently running with an older kernel"
             warning "When ready, ensure you have copied the new version"
             warning "to the EFI system partition"
@@ -1151,7 +1178,7 @@ display_final_status() {
     show "All done - your system is now up-to-date!"
     show "$(date)"
 
-    if [[ -n ${body} ]]; then
+    if [[ -n "${body}" ]]; then
         send_email "${subject}" "${body}"
     fi
 }
@@ -1337,7 +1364,14 @@ process_command_line_options() {
             -r|--adjustment)
                 case "${2}" in
                     "") shift 2 ;;
-                    *) ADJUSTMENT="${2}" ; shift 2 ;;
+                    *)
+                        if ! is_integer "${2}"; then
+                            display_usage_message_and_bail_out "Invalid --adjustment value '${2}' (must be an integer)"
+                        fi
+                        ADJUSTMENT="${2}"
+                        shift 2
+                        ;;
+
                 esac ;;
             -S|--no-eix-sync) ARG_NO_EIX_SYNC=1 ; shift ;;
             -v|--verbose) ARG_VERBOSE=1 ; shift ;;
@@ -1363,6 +1397,7 @@ process_command_line_options() {
             *) die "Internal error!" ;;
         esac
     done
+
     # process 'perform-then-exit' options
     if ((ARG_HELP==1)); then
         print_help
@@ -1371,9 +1406,11 @@ process_command_line_options() {
         print_version
         cleanup_and_exit_with_code 0
     fi
+
     # setup emerge, buildkernel commands with specified niceness
     EMERGE="nice -n ${ADJUSTMENT} emerge"
     BUILDKERNEL="nice -n ${ADJUSTMENT} buildkernel"
+
     # set verbosity
     if ((ARG_VERBOSE==1)); then
         VERBOSITY+=1
@@ -1381,6 +1418,7 @@ process_command_line_options() {
     if ((VERBOSITY>1)); then
         VERBOSITYFLAG="--verbose"
     fi
+
     # set interactive mode
     if ((ARG_ASK==1)); then
         ASKFLAG="--ask"
@@ -1390,16 +1428,19 @@ process_command_line_options() {
     else
         suppress_alert
     fi
+
     # check for sakaki-/buildkernel
     if ! have_cmd buildkernel ; then
         warning "disabling buildkernel, not found"
         USE_BUILDKERNEL=false
     fi
+
     # check for sakaki-/emtee
     if ! have_cmd emtee ; then
         warning "disabling emtee, not found"
         USE_EMTEE=false
     fi
+
     # disable email if sendmail not found / misconfigured
     if [[ -n "${EMAIL_TO:-}" ]]; then
         if ! have_cmd sendmail; then
@@ -1408,8 +1449,13 @@ process_command_line_options() {
         elif [[ -z "${EMAIL_FROM:-}" ]]; then
             warning "email recipients '${EMAIL_TO}' defined without --email-from address, disabling sendmail"
             EMAIL_TO=""
+        elif ! reject_newlines "${EMAIL_TO}" || ! reject_newlines "${EMAIL_FROM}"; then
+            warning "email fields contain newline characters; disabling sendmail for safety"
+            EMAIL_TO=""
+            EMAIL_FROM=""
         fi
     fi
+
     # sys-kernel/genkernel
     if ! have_cmd genkernel ; then
         warning "disabling genkernel, not found"
