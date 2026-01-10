@@ -185,23 +185,38 @@ detect_selected_compiler() {
 }
 
 send_email() {
-    #check if generating mail events was configured
+    # If email notifications aren't configured, do nothing.
     if [[ -z "${EMAIL_TO:-}" ]]; then
-        return
+        return 0
+    fi
+
+    if ! have_cmd sendmail; then
+        warning "sendmail not found; skipping email notification"
+        return 0
     fi
 
     local subject body
     subject="${PROGNAME} :: $(hostname) :: ${1:-}"
-    
+
     body="\n$(hostname)\n"
     body+="$(date)\n"
     body+="$(uptime)\n"
-    # body+="$(eselect profile list | grep "*" | awk '{ print $2 }')\n\n"
     body+="\n\n${2:-}"
 
+    # Never allow email sending failures to abort the script (set -e safe).
+    local rc=0
+    set +e
     printf 'From: %s\r\nTo: %s\r\nSubject: %s\r\n\r\n%b' \
         "${EMAIL_FROM}" "${EMAIL_TO}" "${subject}" "${body}" | \
         sendmail -f "${EMAIL_FROM}" -- "${EMAIL_TO//,/ }"
+    rc=$?
+    set -e
+
+    if (( rc != 0 )); then
+        warning "sendmail failed (rc=${rc}); continuing without email"
+    fi
+
+    return 0
 }
 
 email_log_tails() {
@@ -360,10 +375,24 @@ set_idle_io_priority() {
 }
 
 read_portage_info_if_necessary() {
-    if [ -z "${PORTAGEINFO}" ]; then
-        show "Checking Portage configuration, please wait..."
-        PORTAGEINFO="$(${EMERGE} --info)"
+    if [[ -n "${PORTAGEINFO}" ]]; then
+        return 0
     fi
+
+    show "Checking Portage configuration, please wait..."
+
+    local out rc
+    set +e
+    out="$(${EMERGE} --info 2>/dev/null)"
+    rc=$?
+    set -e
+
+    if (( rc != 0 )) || [[ -z "${out}" ]]; then
+        die "failed to obtain Portage configuration via '${EMERGE} --info'"
+    fi
+
+    PORTAGEINFO="${out}"
+    return 0
 }
 
 update_toolchain () {
@@ -1476,9 +1505,9 @@ process_command_line_options() {
 
 # *************** start of script proper ***************
 suppress_colour_and_alert_if_output_not_to_a_terminal
+process_command_line_options "${@}"
 check_if_root
 set_idle_io_priority
-process_command_line_options "${@}"
 set_usepkg
 check_if_using_webrsync_gpg
 display_greeting
@@ -1494,7 +1523,7 @@ ensure_genup_itself_is_up_to_date
 try_emtee_update_if_enabled
 update_all_packages_in_world_set_and_dependencies
 rebuild_live_packages
-# intentiall run --depclean twice
+# intentionally run --depclean twice
 remove_unreferenced_packages
 rebuild_packages_depending_on_stale_libraries
 bring_old_perl_modules_up_to_date
