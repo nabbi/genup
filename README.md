@@ -52,7 +52,19 @@ The script has been deliberately decoupled from a hard dependency on the ebuilds
 
 * Updates the Portage tree and active overlays, and syncs **eix**(1)
 
-  * Using `emaint sync` and `eix-sync`
+  * Using `emaint sync --auto` and `eix-sync`
+* Updates Portage user patches (if `/etc/portage/patches` is a git repo)
+
+  * Using `git -C /etc/portage/patches pull`
+* Updates selected toolchain packages first (best effort)
+
+  * Using `emerge --oneshot --update` for `sys-devel/gcc`, `sys-libs/glibc`, `sys-devel/binutils`, `dev-build/cmake` (or clang equivalents depending on compiler mode)
+* Checks and repairs gcc configuration if invalid (best effort)
+
+  * Using `gcc-config`, `env-update`, and re-emerging `libtool`
+* Mounts `/boot` if required, and remounts writable when necessary
+
+  * Using `findmnt`, `mount`, and `umount`
 * Removes any prior **emerge**(1) resume state
 
   * Using `emaint --fix cleanresume`
@@ -61,39 +73,44 @@ The script has been deliberately decoupled from a hard dependency on the ebuilds
   * By running `/etc/cron.weekly/fixup` if present (errors are non-fatal)
 * Ensures **Portage**(5) itself is up to date
 
-  * Using `emerge --oneshot --update portage`
+  * Using `emerge --oneshot --update portage` (failures are warnings)
 * Ensures **genup** itself is up to date
 
-  * Using `emerge --oneshot --update genup` (restarting if updated)
+  * Using `emerge --oneshot genup` (restarting if the version changes)
+* Attempts a preliminary `@world` update using **emtee**(1)
+
+  * If `emtee` is installed and not disabled; failure is non-fatal
 * Updates all packages in the `@world` set
 
-  * First using **emtee**(1), if enabled via USE flags
-  * Then using `emerge --deep --with-bdeps=y --changed-use --update @world`
-* Removes unreferenced packages
+  * Using `emerge --deep --with-bdeps=y --changed-use --update @world` with backtracking and retry logic
+* Optionally rebuilds live (-9999) packages
 
-  * Using `emerge --depclean`
-* Rebuilds external kernel modules (for example VirtualBox)
+  * Using `emerge @live-rebuild`
+* Removes unreferenced packages (first pass)
 
-  * Using `emerge @module-rebuild --exclude '*-bin'`
-* Rebuilds packages linked against stale libraries
+  * Using `emerge --depclean` (skipped if `webapp-config` reports unused installs)
+* Rebuilds packages depending on stale libraries
 
-  * Using `emerge @preserved-rebuild`
+  * Using `emerge @preserved-rebuild` (run twice, second pass suppressing getbinpkg)
 * Updates outdated **perl**(1) modules
 
   * Using `perl-cleaner --all`
-* Resolves configuration file updates in interactive mode
+* Upgrades the kernel if possible (to staging, in `/boot`)
 
-  * Using `dispatch-conf`
-* Builds a new kernel into staging, if supported
+  * Using `buildkernel --stage-only` when available; otherwise `genkernel`
+* Builds any external modules (such as those for VirtualBox)
 
-  * Using `buildkernel --stage-only`
-* Removes unreferenced packages (again)
+  * Using `emerge @module-rebuild --exclude '*-bin'`
+* Resolves clashing config file changes
+
+  * Using `dispatch-conf` (in interactive mode, or if forced via `--dispatch-conf`)
+* Removes unreferenced packages (second pass)
 
   * Using `emerge --depclean`
 * Fixes missing shared library dependencies
 
   * Using `revdep-rebuild`
-* Rebuilds preserved libraries (again)
+* Rebuilds packages depending on stale libraries (second pass)
 
   * Using `emerge @preserved-rebuild`
 * Optionally removes unused distfiles
@@ -102,13 +119,14 @@ The script has been deliberately decoupled from a hard dependency on the ebuilds
 * Deploys a staged kernel, if available and requested
 
   * Using `buildkernel --copy-from-staging`
-* Updates environment settings as a precaution
+* Updates environment settings
 
   * Using `env-update`
 * Updates **eix** package metadata
 
   * Using `eix-sync -0`
 * Runs any custom updater scripts found in `/etc/genup/updaters.d`
+* Unmounts `/boot` if it was mounted by genup
 
 The utility can be run in non-interactive mode (the default) or interactive mode using the **--ask** option. Non-interactive mode is suitable for scripted execution, such as nightly **cron**(8) jobs.
 

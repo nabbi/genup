@@ -1,4 +1,4 @@
-.TH GENUP 8 "Version 1.1.1: January 2026"
+.TH GENUP 8 "Version 1.1.2: January 2026"
 .SH NAME
 genup \- update Portage tree, all installed packages, and kernel
 .SH SYNOPSIS
@@ -145,6 +145,10 @@ Pass additional arguments to the initial
 .BR buildkernel (8)
 invocation used to build the kernel in the staging area.
 .TP
+.BR \-\-compiler\=MODE
+Select toolchain mode: \fBauto\fR (default), \fBgcc\fR, or \fBclang\fR.
+Controls which compiler packages are checked during the toolchain update step.
+.TP
 .BR \-c ", " \-\-dispatch\-conf
 Force \fBdispatch-conf\fR(1) to be run when configuration file updates
 are detected, even in non-interactive mode.
@@ -157,11 +161,11 @@ Do not run custom updaters from
 Automatically deploy a newly built kernel from the staging area to
 the EFI system partition.
 .TP
-.BR \-\-email
+.BR \-\-email\=ADDR
 Send status and error notifications via sendmail to the specified
 recipient list.
 .TP
-.BR \-\-email\-from
+.BR \-\-email\-from\=ADDR
 Specify the sender address used for email notifications.
 .TP
 .BR \-e ", " \-\-emerge\-args\=ADDITIONAL_ARGS

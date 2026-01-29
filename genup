@@ -75,7 +75,7 @@ BUILDKERNELARGS=""
 BOOTMOUNTED=0
 EIXSYNCARGS=""
 NODISTCC="-distcc -distcc-pump"
-FALLBACK_SENTINEL="/tmp/.full-emptytree-emerge-performed"
+FALLBACK_SENTINEL="/run/genup/.full-emptytree-emerge-performed"
 PORTAGEINFO=""
 PORTAGEFEATURES=""
 declare -i KERNELBUILT=0 KERNELDEPLOYED=0 NEEDSDISPATCHCONF=0
@@ -664,6 +664,7 @@ try_emtee_update_if_enabled() {
         # emerge afterwards anyhow
         show "Attempting to update @world set (for new versions, or changed use flags)"
         show "using emtee..."
+        install -d -m 0700 /run/genup
         rm -f "${FALLBACK_SENTINEL}"
         # Intentionally allow word-splitting in ASKFLAG/ALERTFLAG/VERBOSITYFLAG (may be empty)
         # shellcheck disable=SC2086
@@ -806,6 +807,7 @@ bring_old_perl_modules_up_to_date() {
     if ((ARG_NO_PERL_CLEANER==0)); then
         if have_cmd perl-cleaner; then
             show "Ensuring perl modules are matched to current version of perl..."
+            # shellcheck disable=SC2086
             perl-cleaner ${VERBOSITYFLAG} --all
         fi
     fi
@@ -880,9 +882,14 @@ interactively_resolve_clashing_config_file_changes() {
     check_if_dispatch_conf_needs_to_be_run
     if ((NEEDSDISPATCHCONF==1)); then
         if ((ARG_ASK==1 || ARG_DISPATCHCONF==1)); then
-            alertshow "Handing any updated configuration file clashes..."
-            dispatch-conf
-            NEEDSDISPATCHCONF=2 # special flag; we'll recheck later
+            if ((ARG_ASK==0)) && ! tty -s; then
+                warning "dispatch-conf requires a tty; skipping in headless mode"
+                warning "(use --ask to run interactively, or run dispatch-conf manually)"
+            else
+                alertshow "Handing any updated configuration file clashes..."
+                dispatch-conf
+                NEEDSDISPATCHCONF=2 # special flag; we'll recheck later
+            fi
         fi
         # otherwise, user will be warned at end to run dispatch-conf
     else
@@ -1023,6 +1030,7 @@ purge_old_distfiles_if_desired() {
     # installed ebuild
     if ((ARG_KEEP_OLD_DISTFILES==0)); then
         show "Purging currently unused source tarballs to save space..."
+        # shellcheck disable=SC2086
         eclean ${VERBOSITYFLAG} --deep --time-limit=2w distfiles
     fi
 }
@@ -1045,6 +1053,7 @@ copy_new_kernel_from_staging_if_present_and_desired() {
         fi
         if [[ $DO_KERNELDEPLOY == 1 ]]; then
             show "Copying new kernel from staging..."
+            # shellcheck disable=SC2086
             ${BUILDKERNEL} ${ASKFLAG} ${ALERTFLAG} ${VERBOSITYFLAG} --copy-from-staging
             KERNELDEPLOYED=1
         fi
@@ -1095,6 +1104,7 @@ rebuild_where_missing_libraries_detected() {
     # emerge --depclean) and attempt to fix them, by re-emerging the broken
     # libraries and binaries (shouldn't do much nowadays, but good to check!)
     show "Fixing any broken/missing libraries and binaries caused by cleanup..."
+    # shellcheck disable=SC2086
     revdep-rebuild ${VERBOSITYFLAG}
 }
 
@@ -1336,7 +1346,7 @@ process_command_line_options() {
     local TEMP
     declare -i RC
 
-    local short_opts="aAb:cCde:EFhiklmMnNpr:SvVx:"
+    local short_opts="aAb:cCde:EFhiklmMnpr:SvVx:"
     local long_opts="ask,alert,compiler:,email:,email-from:,buildkernel-args:,dispatch-conf,no-custom-updaters,deploy-from-staging,emerge-args:,no-emtee,no-fixups,help,ignore-required-changes,keep-old-distfiles,no-eix-metadata-update,live-rebuild,no-module-rebuild,no-kernel-upgrade,no-perl-cleaner,adjustment:,no-eix-sync,verbose,version,eix-sync-args:"
 
     set +e

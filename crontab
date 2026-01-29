@@ -1,4 +1,5 @@
 # genup crontab
+MAILTO=""
 PATH=/sbin:/bin:/usr/sbin:/usr/bin
 
 # defined with your own schedule and flags

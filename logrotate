@@ -1,5 +1,6 @@
 # genup
 /var/log/genup.log {
+        su root root
         daily
         rotate 14
         compress
