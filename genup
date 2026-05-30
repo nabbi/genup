@@ -25,6 +25,7 @@
 set -e
 set -u
 set -o pipefail
+set -o errtrace        # ensure the ERR trap is inherited by functions/subshells
 shopt -s nullglob
 
 # Scroll to the bottom of this script to follow the main program flow.
@@ -112,6 +113,18 @@ reject_newlines() {
         *$'\n'*|*$'\r'*) return 1 ;;
     esac
     return 0
+}
+
+emerge_failure_is_unrecoverable() {
+    # Return 0 if the supplied emerge output shows a failure that cannot be
+    # worked around by retrying with reduced parallelism / distcc disabled,
+    # because nothing was ever queued to build: an unsatisfied REQUIRED_USE
+    # constraint, a masked package, a blocker, a slot or shared-dependency
+    # conflict, or a circular dependency. Such failures need user or config
+    # intervention, so callers should fault on them directly rather than
+    # attempting (and misreporting) an empty 'emerge --resume'.
+    grep -qiE 'has unmet requirements|REQUIRED_USE|have been masked|changes are necessary to proceed|cannot be installed at the same time|package instances within a single package slot|circular dependencies' \
+        <<< "${1:-}"
 }
 
 get_portage_envvar() {
@@ -278,7 +291,7 @@ set_usepkg() {
 
 cleanup_and_exit_with_code() {
     # add any cleanup code here
-    trap - EXIT
+    trap - ERR EXIT
     exit "$1"
 }
 
@@ -305,6 +318,9 @@ warning() {
 }
 
 die() {
+    # disarm the ERR trap so any non-zero exit while we report/email the
+    # failure cannot recurse back into die()
+    trap - ERR
     printf "\n" >&2
     printf "%b\n" "${RED_TEXT}${PREFIXSTRING}${RESET_ATTS}${PROGNAME}: Error: ${1:-} - exiting" >&2
 
@@ -322,10 +338,28 @@ trap_cleanup() {
     die "Caught signal ${sig}"
 }
 
+# shellcheck disable=SC2317  # called indirectly via trap
+trap_err() {
+    # Fired (via errtrace) whenever a command fails in a context that would
+    # otherwise abort the script under 'set -e'. This routes such failures
+    # through die() so that an error email is sent, instead of exiting
+    # silently. We deliberately ignore failures inside explicit `set +e`
+    # regions (errexit off, so 'e' absent from $-): those code paths check
+    # their own exit codes.
+    local rc="${1:-?}" line="${2:-?}" cmd="${3:-}"
+    case $- in
+        *e*) ;;
+        *) return 0 ;;
+    esac
+    trap - ERR
+    die "unexpected error (rc=${rc}) at line ${line}: ${cmd}"
+}
+
 trap 'trap_cleanup HUP'  HUP
 trap 'trap_cleanup QUIT' QUIT
 trap 'trap_cleanup INT'  INT
 trap 'trap_cleanup TERM' TERM
+trap 'trap_err "$?" "${LINENO}" "${BASH_COMMAND}"' ERR
 
 check_if_root() {
     if [ "$EUID" -ne 0 ]; then
@@ -725,7 +759,7 @@ update_all_packages_in_world_set_and_dependencies() {
     # before anything is built, queues nothing, and cannot be worked around by
     # retrying with reduced parallelism. It needs user intervention, so report
     # it directly (rather than masking it behind an empty 'emerge --resume').
-    if grep -qiE 'has unmet requirements|REQUIRED_USE|have been masked|changes are necessary to proceed|cannot be installed at the same time|package instances within a single package slot|circular dependencies' <<< "${world_out}"; then
+    if emerge_failure_is_unrecoverable "${world_out}"; then
         if ((ARG_IGNORE_REQUIRED_CHANGES==1)); then
             warning "@world needs dependency or config changes (see above);"
             warning "continuing anyway, as requested via --ignore-required-changes"
@@ -751,8 +785,17 @@ rebuild_live_packages() {
     fi
 
     show "emerge @live-rebuild -9999 packages"
-    if ! ${EMERGE} ${VERBOSITYFLAG} @live-rebuild; then
-        if MAKEOPTS="${MAKEOPTS-} -j1" FEATURES="${NODISTCC}" ${EMERGE} --resume; then
+    local out rc=0
+    set +e
+    # shellcheck disable=SC2086
+    out=$(${EMERGE} ${VERBOSITYFLAG} @live-rebuild 2>&1 | tee /dev/stderr; exit "${PIPESTATUS[0]}")
+    rc=$?
+    set -e
+    if ((rc != 0)); then
+        if emerge_failure_is_unrecoverable "${out}"; then
+            warning "emerge @live-rebuild hit an unresolved dependency/config issue (see above)"
+            warning "Continuing..."
+        elif MAKEOPTS="${MAKEOPTS-} -j1" FEATURES="${NODISTCC}" ${EMERGE} --resume; then
             warning "emerge @live-rebuild completed successfully, but only by restricting"
             warning "build parallelism and distcc"
         else
@@ -775,8 +818,18 @@ rebuild_external_modules_if_necessary() {
     # (and may even be binary kernel packages, swept up into the
     # @module-rebuild set as they 'own' kernel modules in
     # /lib/modules/<release>/...)
-    if ! ${EMERGE} ${VERBOSITYFLAG} @module-rebuild --exclude '*-bin'; then
-        if MAKEOPTS="${MAKEOPTS-} -j1" FEATURES="${NODISTCC}" ${EMERGE} --resume; then
+    local out rc=0
+    set +e
+    # shellcheck disable=SC2086
+    out=$(${EMERGE} ${VERBOSITYFLAG} @module-rebuild --exclude '*-bin' 2>&1 \
+        | tee /dev/stderr; exit "${PIPESTATUS[0]}")
+    rc=$?
+    set -e
+    if ((rc != 0)); then
+        if emerge_failure_is_unrecoverable "${out}"; then
+            warning "emerge @module-rebuild hit an unresolved dependency/config issue (see above)"
+            warning "Continuing..."
+        elif MAKEOPTS="${MAKEOPTS-} -j1" FEATURES="${NODISTCC}" ${EMERGE} --resume; then
             warning "emerge @module-rebuild completed successfully, but only by restricting"
             warning "build parallelism and distcc"
         else
@@ -799,8 +852,19 @@ rebuild_packages_depending_on_stale_libraries() {
     # disabled, in case there are any local packages which need rebuilding (and
     # where we need to suppress getbinpkg, otherwise it'll just re-install from the
     # local tbz2)
-    if ! ${EMERGE} ${EMERGE_USEPKG} ${VERBOSITYFLAG} @preserved-rebuild; then
-        if MAKEOPTS="${MAKEOPTS-} -j1" FEATURES="${NODISTCC}" ${EMERGE} --resume; then
+    local out rc=0
+    set +e
+    # shellcheck disable=SC2086
+    out=$(${EMERGE} ${EMERGE_USEPKG} ${VERBOSITYFLAG} @preserved-rebuild 2>&1 \
+        | tee /dev/stderr; exit "${PIPESTATUS[0]}")
+    rc=$?
+    set -e
+    if ((rc != 0)); then
+        # first (getbinpkg-enabled) pass is non-fatal; the suppressed pass below
+        # repeats the work and is authoritative
+        if emerge_failure_is_unrecoverable "${out}"; then
+            warning "emerge @preserved-rebuild hit an unresolved dependency/config issue (see above)"
+        elif MAKEOPTS="${MAKEOPTS-} -j1" FEATURES="${NODISTCC}" ${EMERGE} --resume; then
             warning "emerge @preserved-rebuild completed successfully, but only by restricting"
             warning "build parallelism and distcc"
         else
@@ -808,8 +872,17 @@ rebuild_packages_depending_on_stale_libraries() {
         fi
     fi
     show "Rebuilding again, with getbinpkg suppressed, to catch any local-only packages..."
-    if !  FEATURES="-getbinpkg" ${EMERGE} ${VERBOSITYFLAG} @preserved-rebuild; then
-        if MAKEOPTS="${MAKEOPTS-} -j1" FEATURES="-getbinpkg ${NODISTCC}" ${EMERGE} --resume; then
+    rc=0
+    set +e
+    # shellcheck disable=SC2086
+    out=$(FEATURES="-getbinpkg" ${EMERGE} ${VERBOSITYFLAG} @preserved-rebuild 2>&1 \
+        | tee /dev/stderr; exit "${PIPESTATUS[0]}")
+    rc=$?
+    set -e
+    if ((rc != 0)); then
+        if emerge_failure_is_unrecoverable "${out}"; then
+            die "Could not rebuild @preserved-rebuild: unresolved dependency or required config changes (see above)"
+        elif MAKEOPTS="${MAKEOPTS-} -j1" FEATURES="-getbinpkg ${NODISTCC}" ${EMERGE} --resume; then
             warning "emerge @preserved-rebuild completed successfully, but only by restricting"
             warning "build parallelism and distcc"
         else
