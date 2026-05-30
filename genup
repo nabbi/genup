@@ -1210,7 +1210,7 @@ check_webapp_config() {
         return
     else
        local webapp
-       webapp=$(webapp-config --list-unused-installs)
+       webapp=$(webapp-config --list-unused-installs || true)
        if [[ -n "${webapp}" ]]; then
             WEBAPP_CONFIG=1
        fi
@@ -1276,7 +1276,9 @@ display_final_status() {
     fi
 
     local glsa
-    glsa=$(glsa-check -t all 2>&1)
+    # best-effort, informational only: glsa-check can exit non-zero when the
+    # system is affected, which must not abort the (already successful) run
+    glsa=$(glsa-check -t all 2>&1 || true)
     if ! grep -q "system is not affected" <<< "${glsa}"; then
         show
         show "${glsa}"
@@ -1284,7 +1286,7 @@ display_final_status() {
     fi
 
     local news
-    news=$(eselect news list new)
+    news=$(eselect news list new || true)
     if ! grep -q "none found" <<< "${news}"; then
         show
         show "${news}"
@@ -1293,7 +1295,7 @@ display_final_status() {
 
     if ((WEBAPP_CONFIG==1)); then
         local webapp
-        webapp=$(webapp-config --list-unused-installs)
+        webapp=$(webapp-config --list-unused-installs || true)
         show
         show "There are unused webapp installs"
         show "${webapp}"
