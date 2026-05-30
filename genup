@@ -706,7 +706,19 @@ update_all_packages_in_world_set_and_dependencies() {
         --with-bdeps=y --changed-use --update --backtrack=50 --keep-going @world; then
         # per make manpage, if multiple "j" opts are specified, the last
         # one takes precedence, so this is legitimate
-        if MAKEOPTS="${MAKEOPTS-} -j1" FEATURES="${NODISTCC}" ${EMERGE} --resume; then
+        #
+        # Note: if the initial emerge failed during dependency resolution
+        # (e.g. an unsatisfied REQUIRED_USE constraint, a mask, or a blocker)
+        # then nothing was ever queued to build, and 'emerge --resume' will
+        # report "nothing to resume" and exit 0. That is NOT a real success,
+        # so we must not treat it as one.
+        local resume_out resume_rc=0
+        set +e
+        resume_out=$(MAKEOPTS="${MAKEOPTS-} -j1" FEATURES="${NODISTCC}" ${EMERGE} --resume 2>&1 \
+            | tee /dev/stderr; exit "${PIPESTATUS[0]}")
+        resume_rc=$?
+        set -e
+        if ((resume_rc==0)) && ! grep -qi "nothing to resume" <<< "${resume_out}"; then
             warning "emerge completed successfully, but only by restricting"
             warning "build parallelism and distcc"
         else
