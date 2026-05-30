@@ -683,7 +683,10 @@ ensure_genup_itself_is_up_to_date() {
     # the 9999 ebuild in oubliette-overlay sets the git HEAD as the version
     # that allows this check to work against lastest git builds
     show "Bringing genup itself up to date..."
-    ${EMERGE} ${VERBOSITYFLAG} --oneshot app-portage/genup
+    # don't fail on this (consistent with the Portage self-update above); a
+    # later @world update may resolve any transient blocks
+    ${EMERGE} ${VERBOSITYFLAG} --oneshot app-portage/genup || \
+        warning "Could not update genup: proceeding anyway"
     # if the above caused the version of genup to change, exec ourselves
     # for a full restart
     if [[ $("${SCRIPTPATH}" --version) != "${VERSION}" ]]; then
@@ -1098,7 +1101,8 @@ build_genkernel() {
     # app-admin/eclean-kernel
     if have_cmd eclean-kernel ; then
         show "Remove old kernel versions"
-        eclean-kernel -d -n 2
+        eclean-kernel -d -n 2 || \
+            warning "eclean-kernel failed to remove old kernels; continuing"
     else
         warning "app-admin/eclean-kernel not installed to remove old kernels"
     fi
@@ -1124,7 +1128,8 @@ purge_old_distfiles_if_desired() {
     if ((ARG_KEEP_OLD_DISTFILES==0)); then
         show "Purging currently unused source tarballs to save space..."
         # shellcheck disable=SC2086
-        eclean ${VERBOSITYFLAG} --deep --time-limit=2w distfiles
+        eclean ${VERBOSITYFLAG} --deep --time-limit=2w distfiles || \
+            warning "eclean failed to purge distfiles; continuing"
     fi
 }
 
@@ -1186,7 +1191,8 @@ remove_unreferenced_packages() {
     # following should be reasonably safe, it removes any packages that are not
     # required by the transitive closure of @world set dependencies
     show "Removing packages not required by @world set..."
-    ${EMERGE} ${ASKFLAG} ${ALERTFLAG} ${VERBOSITYFLAG} --depclean
+    ${EMERGE} ${ASKFLAG} ${ALERTFLAG} ${VERBOSITYFLAG} --depclean || \
+        warning "depclean did not complete successfully; continuing"
     # we may have just blown away our old version of gcc, but not enabled
     # the replacement version's config, so...
     check_gcc_config_and_reset_if_necessary
@@ -1198,7 +1204,8 @@ rebuild_where_missing_libraries_detected() {
     # libraries and binaries (shouldn't do much nowadays, but good to check!)
     show "Fixing any broken/missing libraries and binaries caused by cleanup..."
     # shellcheck disable=SC2086
-    revdep-rebuild ${VERBOSITYFLAG}
+    revdep-rebuild ${VERBOSITYFLAG} || \
+        warning "revdep-rebuild did not complete successfully; continuing"
 }
 
 check_webapp_config() {
