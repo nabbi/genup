@@ -687,62 +687,62 @@ update_all_packages_in_world_set_and_dependencies() {
     # will update any package whose use flags have changed
     # the @world set includes the @system set
     # will not re-emerge packages that are already up-to-date
-    declare -i RC USER_CHANGES_REQUIRED=0
     show "Updating @world set (for new versions, or changed use flags)..."
-    if ((ARG_ASK==0 && ARG_IGNORE_REQUIRED_CHANGES==0)); then
-        # if in non-interactive mode, we'll check first if the build
-        # looks possible; you can set the --ignore-required-changes option to
-        # suppress this test
+
+    # When running interactively, run emerge directly so it keeps its
+    # controlling terminal (colour, live progress, --ask prompts). On failure,
+    # offer to resume by hand.
+    if ((ARG_ASK==1)); then
         # shellcheck disable=SC2086
-        if grep -qi "The following \(keyword\|mask\|USE\|license\) changes are necessary to proceed" \
-            <(${EMERGE} ${VERBOSITYFLAG} ${EMERGEARGS} ${EMERGE_USEPKG} --pretend --deep \
-            --with-bdeps=y --changed-use --update --backtrack=50 --keep-going @world 2>&1 || true); then
-            # silently note this fact, then fail later
-            USER_CHANGES_REQUIRED=1
+        if ! ${EMERGE} ${ASKFLAG} ${ALERTFLAG} ${VERBOSITYFLAG} ${EMERGEARGS} ${EMERGE_USEPKG} --deep \
+            --with-bdeps=y --changed-use --update --backtrack=50 --keep-going @world; then
+            warning "emerge did not complete successfully"
+            show "You can try to fix the problem in another console, then return here"
+            show "and resume the emerge"
+            continue_yn "Attempt to resume the emerge now"
+            MAKEOPTS="${MAKEOPTS-} -j1" ${EMERGE} --resume
         fi
+        return 0
     fi
+
+    # Non-interactive: capture the output (still shown live via tee) so that a
+    # failure can be classified at source.
+    local world_out world_rc=0
+    set +e
     # shellcheck disable=SC2086
-    if ! ${EMERGE} ${ASKFLAG} ${ALERTFLAG} ${VERBOSITYFLAG} ${EMERGEARGS} ${EMERGE_USEPKG} --deep \
-        --with-bdeps=y --changed-use --update --backtrack=50 --keep-going @world; then
-        # per make manpage, if multiple "j" opts are specified, the last
-        # one takes precedence, so this is legitimate
-        #
-        # Note: if the initial emerge failed during dependency resolution
-        # (e.g. an unsatisfied REQUIRED_USE constraint, a mask, or a blocker)
-        # then nothing was ever queued to build, and 'emerge --resume' will
-        # report "nothing to resume" and exit 0. That is NOT a real success,
-        # so we must not treat it as one.
-        local resume_out resume_rc=0
-        set +e
-        resume_out=$(MAKEOPTS="${MAKEOPTS-} -j1" FEATURES="${NODISTCC}" ${EMERGE} --resume 2>&1 \
-            | tee /dev/stderr; exit "${PIPESTATUS[0]}")
-        resume_rc=$?
-        set -e
-        if ((resume_rc==0)) && ! grep -qi "nothing to resume" <<< "${resume_out}"; then
-            warning "emerge completed successfully, but only by restricting"
-            warning "build parallelism and distcc"
-        else
-            # we still have a problem, allow the user to attempt to fix if
-            # running interactively
-            if ((ARG_ASK==1)); then
-                warning "emerge did not complete successfully"
-                show "You can try to fix the problem in another console, then return here"
-                show "and resume the emerge"
-                continue_yn "Attempt to resume the emerge now"
-                MAKEOPTS="${MAKEOPTS-} -j1" ${EMERGE} --resume
-            else
-                die "Failed to complete the emerge due to error"
-            fi
+    world_out=$(${EMERGE} ${ALERTFLAG} ${VERBOSITYFLAG} ${EMERGEARGS} ${EMERGE_USEPKG} --deep \
+        --with-bdeps=y --changed-use --update --backtrack=50 --keep-going @world 2>&1 \
+        | tee /dev/stderr; exit "${PIPESTATUS[0]}")
+    world_rc=$?
+    set -e
+    if ((world_rc == 0)); then
+        return 0
+    fi
+
+    # The emerge failed. Fault on the *first* error. A dependency/config
+    # resolution failure -- an unsatisfied REQUIRED_USE constraint, a masked
+    # package, a blocker, a slot or shared-dependency conflict -- happens
+    # before anything is built, queues nothing, and cannot be worked around by
+    # retrying with reduced parallelism. It needs user intervention, so report
+    # it directly (rather than masking it behind an empty 'emerge --resume').
+    if grep -qiE 'has unmet requirements|REQUIRED_USE|have been masked|changes are necessary to proceed|cannot be installed at the same time|package instances within a single package slot|circular dependencies' <<< "${world_out}"; then
+        if ((ARG_IGNORE_REQUIRED_CHANGES==1)); then
+            warning "@world needs dependency or config changes (see above);"
+            warning "continuing anyway, as requested via --ignore-required-changes"
+            return 0
         fi
+        die "Could not update @world: unresolved dependency or required config changes (see above)"
     fi
-    # this may have looked like it went OK, but still failed, because user
-    # changes to e.g. /etc/portage/package.use are required (the resume
-    # list will be empty in this case, so the retry with parallelism
-    # off will 'succeed'): if this happens we'll bail out (unless explicitly
-    # requested not to, via the --ignore-required-changes option)
-    if ((USER_CHANGES_REQUIRED==1)); then
-        die "Could not update @world because config changes required (please see above)"
+
+    # Otherwise it looks like a build failure that may have been caused by
+    # parallelism or distcc; retry the queued build with both disabled (per the
+    # make manpage, the last of multiple "j" options wins, so this is legitimate).
+    if MAKEOPTS="${MAKEOPTS-} -j1" FEATURES="${NODISTCC}" ${EMERGE} --resume; then
+        warning "emerge completed successfully, but only by restricting"
+        warning "build parallelism and distcc"
+        return 0
     fi
+    die "Failed to complete the emerge due to error"
 }
 
 rebuild_live_packages() {
