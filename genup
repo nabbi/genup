@@ -198,6 +198,12 @@ send_email() {
     local subject body
     subject="${PROGNAME} :: $(hostname) :: ${1:-}"
 
+    # Split the comma-separated recipient list into separate arguments so
+    # sendmail receives each address individually (quoting the whole list
+    # would pass it as one invalid recipient).
+    local -a recipients
+    IFS=',' read -ra recipients <<< "${EMAIL_TO}"
+
     body="\n$(hostname)\n"
     body+="$(date)\n"
     body+="$(uptime)\n"
@@ -208,7 +214,7 @@ send_email() {
     set +e
     printf 'From: %s\r\nTo: %s\r\nSubject: %s\r\n\r\n%b' \
         "${EMAIL_FROM}" "${EMAIL_TO}" "${subject}" "${body}" | \
-        sendmail -f "${EMAIL_FROM}" -- "${EMAIL_TO//,/ }"
+        sendmail -f "${EMAIL_FROM}" -- "${recipients[@]}"
     rc=$?
     set -e
 
