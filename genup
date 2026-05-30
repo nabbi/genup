@@ -740,13 +740,15 @@ update_all_packages_in_world_set_and_dependencies() {
     fi
 
     # Non-interactive: capture the output (still shown live via tee) so that a
-    # failure can be classified at source.
+    # failure can be classified at source. NB: tee MUST use -a here -- without
+    # it tee opens /dev/stderr with O_TRUNC, which truncates the log file when
+    # stderr is redirected to one (e.g. the cron '>> genup.log 2>&1' case).
     local world_out world_rc=0
     set +e
     # shellcheck disable=SC2086
     world_out=$(${EMERGE} ${ALERTFLAG} ${VERBOSITYFLAG} ${EMERGEARGS} ${EMERGE_USEPKG} --deep \
         --with-bdeps=y --changed-use --update --backtrack=50 --keep-going @world 2>&1 \
-        | tee /dev/stderr; exit "${PIPESTATUS[0]}")
+        | tee -a /dev/stderr; exit "${PIPESTATUS[0]}")
     world_rc=$?
     set -e
     if ((world_rc == 0)); then
@@ -788,7 +790,7 @@ rebuild_live_packages() {
     local out rc=0
     set +e
     # shellcheck disable=SC2086
-    out=$(${EMERGE} ${VERBOSITYFLAG} @live-rebuild 2>&1 | tee /dev/stderr; exit "${PIPESTATUS[0]}")
+    out=$(${EMERGE} ${VERBOSITYFLAG} @live-rebuild 2>&1 | tee -a /dev/stderr; exit "${PIPESTATUS[0]}")
     rc=$?
     set -e
     if ((rc != 0)); then
@@ -822,7 +824,7 @@ rebuild_external_modules_if_necessary() {
     set +e
     # shellcheck disable=SC2086
     out=$(${EMERGE} ${VERBOSITYFLAG} @module-rebuild --exclude '*-bin' 2>&1 \
-        | tee /dev/stderr; exit "${PIPESTATUS[0]}")
+        | tee -a /dev/stderr; exit "${PIPESTATUS[0]}")
     rc=$?
     set -e
     if ((rc != 0)); then
@@ -856,7 +858,7 @@ rebuild_packages_depending_on_stale_libraries() {
     set +e
     # shellcheck disable=SC2086
     out=$(${EMERGE} ${EMERGE_USEPKG} ${VERBOSITYFLAG} @preserved-rebuild 2>&1 \
-        | tee /dev/stderr; exit "${PIPESTATUS[0]}")
+        | tee -a /dev/stderr; exit "${PIPESTATUS[0]}")
     rc=$?
     set -e
     if ((rc != 0)); then
@@ -876,7 +878,7 @@ rebuild_packages_depending_on_stale_libraries() {
     set +e
     # shellcheck disable=SC2086
     out=$(FEATURES="-getbinpkg" ${EMERGE} ${VERBOSITYFLAG} @preserved-rebuild 2>&1 \
-        | tee /dev/stderr; exit "${PIPESTATUS[0]}")
+        | tee -a /dev/stderr; exit "${PIPESTATUS[0]}")
     rc=$?
     set -e
     if ((rc != 0)); then
