@@ -1000,15 +1000,18 @@ offer_kernel_upgrade_to_staging_if_available() {
     fi
 
     local current_kv running_base
-    local sel_kv last_idx last_kv
+    local sel_idx sel_kv last_idx last_kv
     local do_upgrade=0
 
     current_kv="$(readlink /usr/src/linux 2>/dev/null || true)"
     running_base="$(uname -r | sed 's/-.*//' || true)"
 
     # Parse eselect kernel list once:
-    # Output: <sel_idx> <sel_kv> <last_idx> <last_kv>
-    read -r _ sel_kv last_idx last_kv < <(
+    # Output: <sel_idx>|<sel_kv>|<last_idx>|<last_kv>
+    # Use a '|' delimiter with an explicit IFS so that empty leading fields
+    # (e.g. when no "*"-marked selected line exists) are preserved rather than
+    # collapsed by the default whitespace IFS, which would shift columns left.
+    IFS='|' read -r sel_idx sel_kv last_idx last_kv < <(
         eselect kernel list 2>/dev/null | awk '
             $1 ~ /^\[[0-9]+\]$/ {
                 idx=$1; gsub(/^\[/,"",idx); gsub(/\]$/,"",idx)
@@ -1018,10 +1021,17 @@ offer_kernel_upgrade_to_staging_if_available() {
             }
             END {
                 # If no "*" line was seen, sel_* may be empty; still print.
-                printf "%s %s %s %s\n", sel_idx, sel_kv, last_idx, last_kv
+                printf "%s|%s|%s|%s\n", sel_idx, sel_kv, last_idx, last_kv
             }
         '
     )
+
+    # If eselect did not mark a selected kernel (no "*"), fall back to the
+    # current /usr/src/linux symlink target so we can still compare against the
+    # latest available source.
+    if [[ -z "${sel_kv}" ]]; then
+        sel_kv="${current_kv}"
+    fi
 
     if [[ -z "${current_kv}" || -z "${last_kv}" || -z "${last_idx}" ]]; then
         warning "Unable to determine current/latest kernel sources (readlink/eselect failed)."
