@@ -117,7 +117,10 @@ The script has been deliberately decoupled from a hard dependency on the ebuilds
   * Using `emerge @preserved-rebuild`
 * Removes unused distfiles older than two weeks (unless `--keep-old-distfiles`)
 
-  * Using `eclean --deep --time-limit=2w distfiles`
+  * Using `eclean --deep --time-limit=2w distfiles`; skipped when `DISTDIR` is a mount point or on a network filesystem (e.g. shared over NFS)
+* Removes binary packages for versions no longer in the tree, older than four weeks (unless `--keep-old-binpkgs`)
+
+  * Using `eclean --time-limit=4w packages` (not `--deep`, so binpkgs merely not installed on this host are kept); skipped when `PKGDIR` is a mount point or on a network filesystem
 * Deploys a staged kernel, if available and requested
 
   * Using `buildkernel --copy-from-staging` (buildkernel only)

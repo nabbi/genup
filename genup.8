@@ -123,7 +123,14 @@ rebuilds packages depending on stale libraries (second pass)
 .IP \(bu 2
 removes any unused source tarballs older than two weeks (if desired)
 .br
-(using \fBeclean --deep --time-limit=2w distfiles\fR)
+(using \fBeclean --deep --time-limit=2w distfiles\fR; skipped when DISTDIR is
+a mount point or on a network filesystem, as it may be shared between hosts)
+.IP \(bu 2
+removes binary packages for versions no longer in the tree, older than four
+weeks (if desired)
+.br
+(using \fBeclean --time-limit=4w packages\fR, without \fB--deep\fR; skipped
+when PKGDIR is a mount point or on a network filesystem)
 .IP \(bu 2
 deploys new kernel from staging (if desired and available; buildkernel only)
 .br
@@ -228,6 +235,9 @@ a blocker, or a slot conflict).
 .TP
 .BR \-k ", " \-\-keep\-old\-distfiles
 Do not purge unused source tarballs.
+.TP
+.BR \-K ", " \-\-keep\-old\-binpkgs
+Do not purge binary packages for versions no longer in the tree.
 .TP
 .BR \-l ", " \-\-no\-live\-rebuild
 Do not rebuild packages in the @live-rebuild set (-9999 ebuilds).
