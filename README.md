@@ -58,12 +58,6 @@ The script has been deliberately decoupled from a hard dependency on the ebuilds
 * Updates Portage user patches (if `/etc/portage/patches` is a git repo)
 
   * Using `git -C /etc/portage/patches pull`
-* Updates selected toolchain packages first (best effort)
-
-  * Using `emerge --oneshot --update` for `sys-libs/glibc`, `sys-devel/binutils`, `dev-build/cmake`, plus `sys-devel/gcc` (gcc mode) or `sys-devel/clang`, `sys-devel/llvm`, `sys-devel/lld` (clang mode); see `--compiler`
-* Checks and repairs gcc configuration if invalid (best effort)
-
-  * Using `gcc-config`, `env-update`, and re-emerging `libtool`
 * Mounts `/boot` if required, and remounts writable when necessary
 
   * Using `findmnt`, `mount`, and `umount`
@@ -79,6 +73,12 @@ The script has been deliberately decoupled from a hard dependency on the ebuilds
 * Ensures **genup** itself is up to date
 
   * Using `emerge --oneshot app-portage/genup` (restarting if the version changes; failures are warnings)
+* Updates selected toolchain packages first (best effort)
+
+  * Using `emerge --oneshot --update` for `sys-libs/glibc`, `sys-devel/binutils`, `dev-build/cmake`, plus `sys-devel/gcc` (gcc mode) or `llvm-core/clang`, `llvm-core/llvm`, `llvm-core/lld` (clang mode); only already-installed packages are updated; see `--compiler`
+* Checks and repairs gcc configuration if invalid (best effort)
+
+  * Using `gcc-config`, `env-update`, and re-emerging `libtool`
 * Attempts a preliminary `@world` update using **emtee**(1)
 
   * If `emtee` is installed and not disabled; failure is non-fatal

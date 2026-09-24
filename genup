@@ -166,11 +166,14 @@ detect_selected_compiler() {
             return 0
             ;;
         "")
-            # no CC in envvar; fall back to PATH
-            if have_cmd clang; then
-                printf "%s\n" "clang"
-            elif have_cmd gcc; then
+            # no CC in envvar: Portage then builds with gcc, so prefer it.
+            # Only report clang when gcc is absent -- clang is commonly
+            # installed on gcc systems (mesa, rust, firefox) without being
+            # the system compiler.
+            if have_cmd gcc; then
                 printf "%s\n" "gcc"
+            elif have_cmd clang; then
+                printf "%s\n" "clang"
             else
                 printf "%s\n" "unknown"
             fi
@@ -468,19 +471,27 @@ update_toolchain () {
             # Keep this list conservative; adjust for your preferred stack.
             # lld is optional but common. compiler-rt/libunwind/libcxx are
             # only needed if you run libc++ and compiler-rt.
-            compiler_packages="sys-devel/clang sys-devel/llvm sys-devel/lld"
+            compiler_packages="llvm-core/clang llvm-core/llvm llvm-core/lld"
             ;;
         *)
             warning "Unable to detect selected compiler; defaulting toolchain check to gcc+clang minimal"
-            compiler_packages="sys-devel/gcc sys-devel/clang sys-devel/llvm"
+            compiler_packages="sys-devel/gcc llvm-core/clang llvm-core/llvm"
             ;;
     esac
 
     local pkg
     for pkg in ${base_packages} ${compiler_packages}; do
-        if ${EMERGE} -p --oneshot --update "${pkg}" 2>/dev/null | awk '
-            # emerge -p lines we care about start like: [ebuild  U  ] category/pkg-version
-            $1 ~ /^\[ebuild/ { found=1 }
+        # only update what is already installed; never pull in new packages
+        # (e.g. glibc on musl, or lld/clang on a system that doesn't use them)
+        if ! portageq has_version / "${pkg}" 2>/dev/null; then
+            continue
+        fi
+        # match the package's own line, e.g.
+        #   [ebuild     U  ] sys-libs/glibc-2.43-r3 [2.43-r2]
+        #   [ebuild  NS    ] sys-devel/gcc-16.1.0 [15.2.1:15]  (new slot)
+        # but not a dependency line, nor sys-devel/gcc-config for sys-devel/gcc
+        if ${EMERGE} -p --oneshot --update "${pkg}" 2>/dev/null | awk -v p="${pkg}" '
+            $0 ~ ("^\\[(ebuild|binary)[^]]*\\] " p "-[0-9]") { found=1 }
             END { exit(found ? 0 : 1) }
         '; then
             show "Updating ${pkg}"
@@ -1667,13 +1678,14 @@ check_if_using_webrsync_gpg
 display_greeting
 update_portage_tree_and_sync_eix
 update_user_patches
-update_toolchain
-check_gcc_config_and_reset_if_necessary
 mount_boot
 remove_any_prior_emerge_resume_history
 run_fixups_if_present
+# Portage first: newer ebuilds (toolchain included) may need a newer Portage
 ensure_portage_itself_is_up_to_date
 ensure_genup_itself_is_up_to_date
+update_toolchain
+check_gcc_config_and_reset_if_necessary
 try_emtee_update_if_enabled
 update_all_packages_in_world_set_and_dependencies
 rebuild_live_packages

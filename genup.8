@@ -25,21 +25,6 @@ updates Portage user patches (if \fI/etc/portage/patches\fR is a git repository)
 .br
 (using \fBgit -C /etc/portage/patches pull\fR)
 .IP \(bu 2
-updates selected toolchain packages first (best effort)
-.br
-(using \fBemerge --oneshot --update\fR for
-\fBsys-libs/glibc\fR,
-\fBsys-devel/binutils\fR,
-\fBdev-build/cmake\fR, plus
-\fBsys-devel/gcc\fR in gcc mode, or
-\fBsys-devel/clang\fR, \fBsys-devel/llvm\fR and \fBsys-devel/lld\fR in clang mode;
-if the compiler cannot be detected, \fBgcc\fR, \fBclang\fR and \fBllvm\fR are checked;
-see \fB--compiler\fR)
-.IP \(bu 2
-checks and repairs gcc configuration if invalid (best effort)
-.br
-(using \fBgcc-config\fR(1), \fBenv-update\fR, and re-emerging \fBlibtool\fR)
-.IP \(bu 2
 mounts \fI/boot\fR if required, and remounts writable when necessary
 .br
 (using \fBfindmnt\fR(8), \fBmount\fR(8), and \fBumount\fR(8))
@@ -59,6 +44,22 @@ ensures Portage itself is up-to-date (best effort)
 ensures genup itself is up-to-date (restarting if the version changes)
 .br
 (using \fBemerge --oneshot app-portage/genup\fR; failures are warnings)
+.IP \(bu 2
+updates selected toolchain packages first (best effort)
+.br
+(using \fBemerge --oneshot --update\fR for
+\fBsys-libs/glibc\fR,
+\fBsys-devel/binutils\fR,
+\fBdev-build/cmake\fR, plus
+\fBsys-devel/gcc\fR in gcc mode, or
+\fBllvm-core/clang\fR, \fBllvm-core/llvm\fR and \fBllvm-core/lld\fR in clang mode;
+if the compiler cannot be detected, \fBgcc\fR, \fBclang\fR and \fBllvm\fR are checked;
+only packages already installed are updated;
+see \fB--compiler\fR)
+.IP \(bu 2
+checks and repairs gcc configuration if invalid (best effort)
+.br
+(using \fBgcc-config\fR(1), \fBenv-update\fR, and re-emerging \fBlibtool\fR)
 .IP \(bu 2
 attempts a preliminary @world update using \fBemtee\fR(1)
 .br
@@ -169,7 +170,8 @@ Cannot be combined with \fB--no-kernel-upgrade\fR.
 Select toolchain mode: \fBauto\fR (default), \fBgcc\fR, or \fBclang\fR.
 Controls which compiler packages are checked during the toolchain update step.
 In \fBauto\fR mode, the compiler is detected from Portage's \fBCC\fR setting,
-falling back to whichever of \fBclang\fR or \fBgcc\fR is on the PATH.
+falling back to \fBgcc\fR if it is on the PATH (Portage's default when \fBCC\fR
+is unset), otherwise \fBclang\fR.
 .TP
 .BR \-c ", " \-\-dispatch\-conf
 Force \fBdispatch-conf\fR(1) to be run when configuration file updates
