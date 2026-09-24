@@ -54,6 +54,11 @@ else
     fi
 fi
 
+# Make git fail rather than prompt for credentials: GitHub answers a deleted
+# repo (e.g. a removed gentoo-mirror overlay) with a username prompt, which
+# would hang a sync.
+export GIT_TERMINAL_PROMPT=0
+
 declare -i VERBOSITY=1
 PREFIXSTRING="* "
 SHOWPREFIX="${GREEN_TEXT}${PREFIXSTRING}${RESET_ATTS}"
