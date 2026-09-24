@@ -8,6 +8,7 @@ genup \- update Portage tree, all installed packages, and kernel
 .B genup
 is a utility intended to simplify the process of keeping your Gentoo system
 up to date.
+It must be run as root.
 When invoked, it automatically performs the following steps, in order:
 .br
 .RS
@@ -15,19 +16,25 @@ When invoked, it automatically performs the following steps, in order:
 updates Portage tree & overlays; syncs \fBeix\fR(1)
 (if desired)
 .br
-(using, if needed, \fBemaint sync --auto\fR, and \fBeix-sync\fR)
+(using \fBeix-sync\fR; if the \fBwebrsync-gpg\fR FEATURE is set, overlays
+are first updated with \fBemaint sync --auto\fR and \fBeix-sync -w\fR is used;
+legacy \fBlayman\fR overlays are synced with \fBlayman -S\fR if installed;
+skipped entirely if any repository location is read-only)
 .IP \(bu 2
-updates Portage user patches (if present)
+updates Portage user patches (if \fI/etc/portage/patches\fR is a git repository)
 .br
 (using \fBgit -C /etc/portage/patches pull\fR)
 .IP \(bu 2
 updates selected toolchain packages first (best effort)
 .br
 (using \fBemerge --oneshot --update\fR for
-\fBsys-devel/gcc\fR,
 \fBsys-libs/glibc\fR,
 \fBsys-devel/binutils\fR,
-\fBdev-build/cmake\fR)
+\fBdev-build/cmake\fR, plus
+\fBsys-devel/gcc\fR in gcc mode, or
+\fBsys-devel/clang\fR, \fBsys-devel/llvm\fR and \fBsys-devel/lld\fR in clang mode;
+if the compiler cannot be detected, \fBgcc\fR, \fBclang\fR and \fBllvm\fR are checked;
+see \fB--compiler\fR)
 .IP \(bu 2
 checks and repairs gcc configuration if invalid (best effort)
 .br
@@ -51,7 +58,7 @@ ensures Portage itself is up-to-date (best effort)
 .IP \(bu 2
 ensures genup itself is up-to-date (restarting if the version changes)
 .br
-(using \fBemerge --oneshot app-portage/genup\fR)
+(using \fBemerge --oneshot app-portage/genup\fR; failures are warnings)
 .IP \(bu 2
 attempts a preliminary @world update using \fBemtee\fR(1)
 .br
@@ -59,12 +66,13 @@ attempts a preliminary @world update using \fBemtee\fR(1)
 .IP \(bu 2
 updates all packages in the @world set
 .br
-(using \fBemerge --deep --with-bdeps=y --changed-use --update @world\fR,
-with backtracking and retry logic)
+(using \fBemerge --deep --with-bdeps=y --changed-use --update
+--backtrack=50 --keep-going @world\fR, with retry logic; see
+\fBPARALLEL MAKE\fR, below)
 .IP \(bu 2
-optionally rebuilds live (-9999) packages
+rebuilds live (-9999) packages (unless disabled)
 .br
-(using \fBemerge @live-rebuild\fR)
+(using \fBemerge --exclude app-portage/genup @live-rebuild\fR; failure is fatal)
 .IP \(bu 2
 removes unreferenced packages (first pass)
 .br
@@ -74,31 +82,31 @@ rebuilds packages depending on stale libraries
 .br
 (using \fBemerge @preserved-rebuild\fR; run twice, second pass suppressing getbinpkg)
 .IP \(bu 2
-fixes missing shared library dependencies
-.br
-(using \fBrevdep-rebuild\fR)
-.IP \(bu 2
 updates any old \fBperl\fR(1) modules (if desired)
 .br
-(using \fBperl-cleaner --all\fR)
+(using \fBperl-cleaner --all\fR, if installed)
 .IP \(bu 2
-upgrades the kernel if possible (to staging, in \fI/boot\fR)
+upgrades the kernel if possible
 .br
-(using \fBbuildkernel --stage-only\fR when available; otherwise \fBgenkernel\fR)
+(using \fBbuildkernel --stage-only\fR when available, which builds to the
+staging area in \fI/boot\fR; otherwise \fBgenkernel all\fR, which installs
+the kernel directly, removes old kernels with \fBeclean-kernel -n 2\fR if
+installed, and updates the bootloader with \fBgrub-mkconfig\fR or \fBlilo\fR)
 .IP \(bu 2
-builds any external modules (such as those for VirtualBox)
+builds any external modules (such as those for VirtualBox), if a kernel was
+built during this run
 .br
-(using \fBemerge @module-rebuild --exclude '*-bin'\fR)
+(using \fBemerge @module-rebuild --exclude '*-bin'\fR; failures are warnings)
 .IP \(bu 2
 resolves clashing config file changes
 .br
-(using \fBdispatch-conf\fR; always in interactive mode, or if forced)
+(using \fBdispatch-conf\fR; in interactive mode, or if forced and a tty is available)
 .IP \(bu 2
 removes unreferenced packages (second pass)
 .br
-(using \fBemerge --depclean\fR)
+(using \fBemerge --depclean\fR; skipped if \fBwebapp-config\fR reports unused installs)
 .IP \(bu 2
-fixes missing shared library dependencies (second check)
+fixes missing shared library dependencies
 .br
 (using \fBrevdep-rebuild\fR)
 .IP \(bu 2
@@ -106,11 +114,11 @@ rebuilds packages depending on stale libraries (second pass)
 .br
 (using \fBemerge @preserved-rebuild\fR)
 .IP \(bu 2
-removes any unused source tarballs (if desired)
+removes any unused source tarballs older than two weeks (if desired)
 .br
-(using \fBeclean --deep distfiles\fR)
+(using \fBeclean --deep --time-limit=2w distfiles\fR)
 .IP \(bu 2
-deploys new kernel from staging (if desired and available)
+deploys new kernel from staging (if desired and available; buildkernel only)
 .br
 (using \fBbuildkernel --copy-from-staging\fR)
 .IP \(bu 2
@@ -123,8 +131,19 @@ updates the \fBeix\fR(1) package metadata (if desired)
 (using \fBeix-sync -0\fR)
 .IP \(bu 2
 runs any custom updaters in \fI/etc/genup/updaters.d\fR
+.br
+(each executable file is run in turn; a non-zero exit status is fatal)
+.IP \(bu 2
+unmounts \fI/boot\fR, or remounts it read-only, if genup changed its state
+.IP \(bu 2
+reports final status, including pending configuration changes, affected
+GLSAs (via \fBglsa-check -t all\fR), and unread news (via
+\fBeselect news list new\fR)
 .PP
 .RE
+If a local binary package directory is found (\fIPKGDIR/Packages\fR exists),
+\fB--usepkg\fR is automatically added to the relevant \fBemerge\fR(1) invocations.
+.PP
 The \fBgenup\fR utility can be invoked in non-interactive (default) or
 interactive mode (see the \fB--ask\fR option, below).
 Non-interactive mode is suitable for scripted invocation, for example
@@ -144,14 +163,18 @@ Selecting this option automatically selects \fB--ask\fR.
 Pass additional arguments to the initial
 .BR buildkernel (8)
 invocation used to build the kernel in the staging area.
+Cannot be combined with \fB--no-kernel-upgrade\fR.
 .TP
 .BR \-\-compiler\=MODE
 Select toolchain mode: \fBauto\fR (default), \fBgcc\fR, or \fBclang\fR.
 Controls which compiler packages are checked during the toolchain update step.
+In \fBauto\fR mode, the compiler is detected from Portage's \fBCC\fR setting,
+falling back to whichever of \fBclang\fR or \fBgcc\fR is on the PATH.
 .TP
 .BR \-c ", " \-\-dispatch\-conf
 Force \fBdispatch-conf\fR(1) to be run when configuration file updates
 are detected, even in non-interactive mode.
+A tty is still required; without one, this step is skipped with a warning.
 .TP
 .BR \-C ", " \-\-no\-custom\-updaters
 Do not run custom updaters from
@@ -159,11 +182,17 @@ Do not run custom updaters from
 .TP
 .BR \-d ", " \-\-deploy\-from\-staging
 Automatically deploy a newly built kernel from the staging area to
-the EFI system partition.
+the EFI system partition (buildkernel only).
+Cannot be combined with \fB--no-kernel-upgrade\fR.
 .TP
-.BR \-\-email\=ADDR
-Send status and error notifications via sendmail to the specified
+.BR \-\-email\=ADDR[,ADDR...]
+Send notifications via \fBsendmail\fR to the specified comma-separated
 recipient list.
+Requires \fB--email-from\fR; otherwise email is disabled with a warning.
+An email is sent on error (including the tail of \fI/var/log/genup.log\fR),
+and on success only if there is something to report (a new or outdated
+kernel, pending configuration changes, GLSAs, unread news, or unused
+webapp installs).
 .TP
 .BR \-\-email\-from\=ADDR
 Specify the sender address used for email notifications.
@@ -171,7 +200,7 @@ Specify the sender address used for email notifications.
 .BR \-e ", " \-\-emerge\-args\=ADDITIONAL_ARGS
 Pass additional arguments to the main
 .BR emerge (1)
-invocation.
+@world invocation (and to \fBemtee\fR(1)).
 .TP
 .BR \-E ", " \-\-no\-emtee
 Do not attempt to use \fBemtee\fR(1), even if installed.
@@ -183,14 +212,17 @@ Do not run \fI/etc/cron.weekly/fixup\fR on aarch64 systems.
 Display a short help screen and exit.
 .TP
 .BR \-i ", " \-\-ignore\-required\-changes
-Do not exit with an error if user configuration changes are required
-to complete the @world update in non-interactive mode.
+Do not exit with an error if the @world update fails in non-interactive
+mode because of an unresolved dependency or configuration problem
+(for example an unsatisfied REQUIRED_USE constraint, a masked package,
+a blocker, or a slot conflict).
 .TP
 .BR \-k ", " \-\-keep\-old\-distfiles
 Do not purge unused source tarballs.
 .TP
-.BR \-l ", " \-\-live\-rebuild
-Rebuild packages in the @live-rebuild set (-9999 ebuilds).
+.BR \-l ", " \-\-no\-live\-rebuild
+Do not rebuild packages in the @live-rebuild set (-9999 ebuilds).
+By default this set is rebuilt on every run.
 .TP
 .BR \-m ", " \-\-no\-eix\-metadata\-update
 Do not update eix metadata at end-of-run.
@@ -200,15 +232,19 @@ Do not rebuild external kernel modules.
 .TP
 .BR \-n ", " \-\-no\-kernel\-upgrade
 Do not attempt to build or deploy a new kernel.
+Implied if neither \fBbuildkernel\fR nor \fBgenkernel\fR is installed.
 .TP
 .BR \-p ", " \-\-no\-perl\-cleaner
 Do not run \fBperl-cleaner\fR(1).
 .TP
 .BR \-r ", " \-\-adjustment\=N
-Set niceness adjustment (-20 <= N <= 19) for build operations.
+Set niceness adjustment (-20 <= N <= 19) for \fBemerge\fR(1) and
+\fBbuildkernel\fR(8) operations.
+The default is 19 (lowest priority).
 .TP
 .BR \-S ", " \-\-no\-eix\-sync
-Do not run repo sync or eix-sync at start of run.
+Do not sync the repositories (\fBemaint sync --auto\fR, \fBeix-sync\fR,
+\fBlayman -S\fR) at start of run, and do not pull Portage user patches.
 .TP
 .BR \-v ", " \-\-verbose
 Enable verbose output.
@@ -222,12 +258,25 @@ Pass additional arguments to
 .SH EXIT STATUS
 The exit status is 0 if the update completed successfully, and 1 otherwise.
 .SH PARALLEL MAKE
-If an \fBemerge\fR(1) operation fails, \fBgenup\fR will attempt to resume
-the build with parallelism restricted (MAKEOPTS=-j1) and distributed
-compilation disabled. A warning is issued if this fallback is required.
+If a non-interactive \fBemerge\fR(1) of @world, @live-rebuild,
+@preserved-rebuild or @module-rebuild fails with a build error,
+\fBgenup\fR will attempt to resume the build with parallelism restricted
+(MAKEOPTS=-j1) and distributed compilation (distcc) disabled.
+A warning is issued if this fallback is required.
+Failures caused by unresolved dependencies or configuration (such as an
+unsatisfied REQUIRED_USE constraint, a masked package, a blocker, or a slot
+conflict) are not retried, since nothing was built.
+.PP
+In interactive mode, a failed @world update instead offers to resume the
+emerge (with MAKEOPTS=-j1) after you have fixed the problem in another console.
 .SH AUTOMATING GENUP
 \fBgenup\fR may be run unattended, for example via \fBcron\fR(8).
 Ensure an appropriate PATH is set.
+\fBgenup\fR does not write a log file itself; redirect its output to
+\fI/var/log/genup.log\fR (for example \fBgenup >> /var/log/genup.log 2>&1\fR)
+so that error notification emails can include the tail of the log.
+Example \fBcron\fR(8) and \fBlogrotate\fR(8) configurations are provided
+with the source.
 .SH COPYRIGHT
 .nf
 Copyright \(co 2014-2020 sakaki
@@ -247,6 +296,8 @@ sakaki \- original author
 .BR eix (1),
 .BR eix-sync (1),
 .BR emaint (1),
+.BR gcc-config (1),
+.BR glsa-check (1),
 .BR nice (1),
 .BR perl-cleaner (1),
 .BR buildkernel (8),

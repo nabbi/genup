@@ -24,7 +24,9 @@ Compared to the original sakaki-/genup, this fork adds or improves support for:
 * Email notifications via `sendmail`
 
   * Relies on a system mailer (for example `nullmailer`) being configured
-* Support for `@live-rebuild`
+* Rebuilds of `@live-rebuild` (-9999) packages on every run
+
+  * Disable with `--no-live-rebuild`
 * Detection of read-only Portage trees and overlays
 
   * Useful for NFS-mounted Portage or overlay setups
@@ -35,9 +37,9 @@ Compared to the original sakaki-/genup, this fork adds or improves support for:
 
   * For users maintaining local patch repositories
 * Automatic mounting and unmounting of `/boot`
-* Optional use of binary packages via `usepkg`
+* Automatic use of local binary packages via `--usepkg`
 
-  * Useful for NFS-mounted bindirs
+  * Enabled when `PKGDIR/Packages` exists; useful for NFS-mounted bindirs
 * Kernel build support via `genkernel`
 
   * Used if installed and `buildkernel` is not available
@@ -52,13 +54,13 @@ The script has been deliberately decoupled from a hard dependency on the ebuilds
 
 * Updates the Portage tree and active overlays, and syncs **eix**(1)
 
-  * Using `emaint sync --auto` and `eix-sync`
+  * Using `eix-sync` (plus `emaint sync --auto` first when the `webrsync-gpg` FEATURE is set, and `layman -S` if installed); skipped if any repository is read-only
 * Updates Portage user patches (if `/etc/portage/patches` is a git repo)
 
   * Using `git -C /etc/portage/patches pull`
 * Updates selected toolchain packages first (best effort)
 
-  * Using `emerge --oneshot --update` for `sys-devel/gcc`, `sys-libs/glibc`, `sys-devel/binutils`, `dev-build/cmake` (or clang equivalents depending on compiler mode)
+  * Using `emerge --oneshot --update` for `sys-libs/glibc`, `sys-devel/binutils`, `dev-build/cmake`, plus `sys-devel/gcc` (gcc mode) or `sys-devel/clang`, `sys-devel/llvm`, `sys-devel/lld` (clang mode); see `--compiler`
 * Checks and repairs gcc configuration if invalid (best effort)
 
   * Using `gcc-config`, `env-update`, and re-emerging `libtool`
@@ -76,16 +78,16 @@ The script has been deliberately decoupled from a hard dependency on the ebuilds
   * Using `emerge --oneshot --update portage` (failures are warnings)
 * Ensures **genup** itself is up to date
 
-  * Using `emerge --oneshot genup` (restarting if the version changes)
+  * Using `emerge --oneshot app-portage/genup` (restarting if the version changes; failures are warnings)
 * Attempts a preliminary `@world` update using **emtee**(1)
 
   * If `emtee` is installed and not disabled; failure is non-fatal
 * Updates all packages in the `@world` set
 
-  * Using `emerge --deep --with-bdeps=y --changed-use --update @world` with backtracking and retry logic
-* Optionally rebuilds live (-9999) packages
+  * Using `emerge --deep --with-bdeps=y --changed-use --update --backtrack=50 --keep-going @world`; build failures are retried with `-j1` and distcc disabled, dependency/config failures are fatal (unless `--ignore-required-changes`)
+* Rebuilds live (-9999) packages (unless `--no-live-rebuild`)
 
-  * Using `emerge @live-rebuild`
+  * Using `emerge --exclude app-portage/genup @live-rebuild`; failure is fatal
 * Removes unreferenced packages (first pass)
 
   * Using `emerge --depclean` (skipped if `webapp-config` reports unused installs)
@@ -94,41 +96,50 @@ The script has been deliberately decoupled from a hard dependency on the ebuilds
   * Using `emerge @preserved-rebuild` (run twice, second pass suppressing getbinpkg)
 * Updates outdated **perl**(1) modules
 
-  * Using `perl-cleaner --all`
-* Upgrades the kernel if possible (to staging, in `/boot`)
+  * Using `perl-cleaner --all` (if installed)
+* Upgrades the kernel if possible
 
-  * Using `buildkernel --stage-only` when available; otherwise `genkernel`
-* Builds any external modules (such as those for VirtualBox)
+  * Using `buildkernel --stage-only` (to staging, in `/boot`) when available; otherwise `genkernel all`, followed by `eclean-kernel -n 2` (if installed) and `grub-mkconfig` or `lilo`
+* Builds any external modules (such as those for VirtualBox), if a kernel was built this run
 
   * Using `emerge @module-rebuild --exclude '*-bin'`
 * Resolves clashing config file changes
 
-  * Using `dispatch-conf` (in interactive mode, or if forced via `--dispatch-conf`)
+  * Using `dispatch-conf` (in interactive mode, or if forced via `--dispatch-conf` and a tty is available)
 * Removes unreferenced packages (second pass)
 
-  * Using `emerge --depclean`
+  * Using `emerge --depclean` (same `webapp-config` check)
 * Fixes missing shared library dependencies
 
   * Using `revdep-rebuild`
 * Rebuilds packages depending on stale libraries (second pass)
 
   * Using `emerge @preserved-rebuild`
-* Optionally removes unused distfiles
+* Removes unused distfiles older than two weeks (unless `--keep-old-distfiles`)
 
-  * Using `eclean --deep distfiles`
+  * Using `eclean --deep --time-limit=2w distfiles`
 * Deploys a staged kernel, if available and requested
 
-  * Using `buildkernel --copy-from-staging`
+  * Using `buildkernel --copy-from-staging` (buildkernel only)
 * Updates environment settings
 
   * Using `env-update`
 * Updates **eix** package metadata
 
   * Using `eix-sync -0`
-* Runs any custom updater scripts found in `/etc/genup/updaters.d`
-* Unmounts `/boot` if it was mounted by genup
+* Runs any custom updater scripts found in `/etc/genup/updaters.d` (a failing updater is fatal)
+* Unmounts `/boot` (or remounts it read-only) if genup changed its state
+* Reports final status, including pending config changes, `glsa-check` results and unread `eselect news`
 
-The utility can be run in non-interactive mode (the default) or interactive mode using the **--ask** option. Non-interactive mode is suitable for scripted execution, such as nightly **cron**(8) jobs.
+genup must be run as root. It can be run in non-interactive mode (the default) or interactive mode using the **--ask** option. Non-interactive mode is suitable for scripted execution, such as nightly **cron**(8) jobs. See `genup --help` or **genup**(8) for all options.
+
+---
+
+## Automation and Email
+
+Example `crontab` and `logrotate` files are included. genup does not write a log file itself, so redirect its output to `/var/log/genup.log` as shown in the example crontab; error emails include the tail of that log.
+
+Email notifications are enabled with `--email a@example.com,b@example.com --email-from host@example.com` (both are required). An email is sent on error, and on success only when there is something to report: a new or outdated kernel, pending config changes, GLSAs, unread news, or unused webapp installs.
 
 ---
 

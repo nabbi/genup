@@ -803,7 +803,7 @@ update_all_packages_in_world_set_and_dependencies() {
 
 rebuild_live_packages() {
     if ((ARG_NO_LIVE_REBUILD==1)); then
-        show "Skipping @live-rebuild (pass --no-live-rebuild / -l to disable)"
+        show "As requested via --no-live-rebuild, skipping @live-rebuild"
         return
     fi
 
@@ -1372,8 +1372,8 @@ Options:
                         (selecting this also automatically selects --ask)
   -b, --buildkernel-args=ARGS
                         pass provided additional ARGS to the initial
-                        (staging) buildkernel invocation (requires buildkernel
-                        USE flag to have been set)
+                        (staging) buildkernel invocation (requires
+                        buildkernel to be installed)
   --compiler=MODE       select toolchain mode: auto (default), gcc, or clang
   -c, --dispatch-conf   run dispatch-conf, even if in non-interactive mode
   -C, --no-custom-updaters
@@ -1382,24 +1382,27 @@ Options:
   -d, --deploy-from-staging
                         if an updated kernel is successfully built in staging,
                         afterwards try to copy it onto the EFI system partition
-                        (requires buildkernel USE flag to have been set)
-  --email               Sendmail recipients
-  --email-from          Sendmail sender address
+                        (requires buildkernel to be installed)
+  --email=ADDR[,ADDR...]
+                        send notifications via sendmail to these
+                        comma-separated recipients (requires --email-from)
+  --email-from=ADDR     sender address for email notifications
   -e, --emerge-args=ARGS
-                        pass provided additional ARGS to the main emerge
+                        pass provided additional ARGS to the main @world
+                        emerge (and emtee)
                         e.g., use --emerge-args='--autounmask-write' to
                         automatically make necessary changes to config files
-  -E, --no-emtee        don't attempt to use the emtee tool, even when the
-                        eponymous USE flag has been enabled
+  -E, --no-emtee        don't attempt to use the emtee tool, even when it
+                        is installed
   -F, --no-fixups
                         do not attempt to run /etc/cron.weekly/fixup, even
                         where this file is present and executable (fixups
                         are only in use on aarch64 systems)
   -h, --help            show this help message and exit
   -i, --ignore-required-changes
-                        don't exit with an error in the event that user-driven
-                        changes are required (to /etc/portage/package.use etc.)
-                        in order to complete the @world update step
+                        don't exit with an error in the event that the @world
+                        update fails on unresolved dependencies or required
+                        config changes (REQUIRED_USE, masks, blockers, etc.)
   -k, --keep-old-distfiles
                         don't purge source tarballs (distfiles) for uninstalled
                         versions of packages (or uninstalled packages)
@@ -1411,13 +1414,14 @@ Options:
   -M, --no-module-rebuild
                         don't attempt to rebuild external modules
   -n, --no-kernel-upgrade
-                        do not attempt to run buildkernel (implied if
-                        buildkernel USE flag has not been set)
+                        do not attempt to build a new kernel (implied if
+                        neither buildkernel nor genkernel is installed)
   -p, --no-perl-cleaner do not attempt to run perl-cleaner
-  -r, --adjustment=N    add integer N to the build niceness -20<=N<=19
+  -r, --adjustment=N    set emerge/buildkernel niceness to N, -20<=N<=19
                         (the default is 19, running builds at lowest possible
                         system priority to avoid slowing the system too much)
-  -S, --no-eix-sync     do not attempt to run emaint sync --auto or eix-sync
+  -S, --no-eix-sync     do not sync repositories (emaint sync --auto, eix-sync,
+                        layman) or git pull /etc/portage/patches
   -v, --verbose         ask called programs to display more information
   -V, --version         display the version number of ${PROGNAME} and exit
   -x, --eix-sync-args=ARGS
@@ -1449,7 +1453,7 @@ internal_consistency_option_checks() {
     # following not exhaustive, just some more obvious snafus
     local KERNMSG="--no-kernel-upgrade"
     if [[ "${USE_BUILDKERNEL}" == false ]]; then
-        KERNMSG="buildkernel USE flag unset"
+        KERNMSG="buildkernel not installed"
     fi
     if ((ARG_NO_KERNEL_UPGRADE==1)); then
         if [[ -n "${BUILDKERNELARGS}" ]]; then
