@@ -390,7 +390,10 @@ check_if_root() {
 acquire_run_lock() {
     # refuse to run concurrently with another genup (e.g. a manual run while
     # a long cron run is still building). The lock is held on fd 9 until we
-    # exit; a self-update re-exec re-takes it in the new process.
+    # exit (released by the kernel however we exit, even SIGKILL); a
+    # self-update re-exec re-takes it in the new process. A child that
+    # outlives us would pin it via the inherited fd, so user-supplied scripts
+    # (updaters, fixups) are run with fd 9 closed.
     if ! have_cmd flock; then
         warning "flock not found; cannot guard against concurrent runs"
         return
@@ -983,7 +986,8 @@ run_custom_updaters_if_present() {
                 REALPATH="$(readlink --canonicalize "${NEXTPATH}")"
                 if [[ -f "${REALPATH}" && -s "${REALPATH}" && -x "${REALPATH}" ]]; then
                     show "Running custom updater '${NEXTPATH}'..."
-                    if ! "${REALPATH}"; then
+                    # 9>&-: never let a daemon started here inherit (and pin) the run lock
+                    if ! "${REALPATH}" 9>&-; then
                         die "Error running custom updater '${NEXTPATH}'"
                     fi
                 fi
@@ -1003,7 +1007,7 @@ run_fixups_if_present() {
     # fixup scripts fail to complete successfully
     if ((ARG_NO_FIXUPS==0)) && [[ -x "${FIXUPSCRIPT}" && "aarch64" == "$(uname -m)" ]]; then
         show "Running fixup scripts via '${FIXUPSCRIPT}'..."
-        if ! "${FIXUPSCRIPT}"; then
+        if ! "${FIXUPSCRIPT}" 9>&-; then
             warning "Not all fixups ran successfully!"
             warning "Continuing anyway; check the log file"
             warning "'/var/log/latest-fixup-run.log' for further details."
