@@ -127,7 +127,7 @@ removes any unused source tarballs older than two weeks (if desired)
 a mount point or on a network filesystem, as it may be shared between hosts)
 .IP \(bu 2
 removes binary packages for versions no longer in the tree, older than four
-weeks (if desired)
+weeks (only if requested with \fB--purge-old-binpkgs\fR)
 .br
 (using \fBeclean --time-limit=4w packages\fR, without \fB--deep\fR; skipped
 when PKGDIR is a mount point or on a network filesystem)
@@ -236,9 +236,6 @@ a blocker, or a slot conflict).
 .BR \-k ", " \-\-keep\-old\-distfiles
 Do not purge unused source tarballs.
 .TP
-.BR \-K ", " \-\-keep\-old\-binpkgs
-Do not purge binary packages for versions no longer in the tree.
-.TP
 .BR \-l ", " \-\-no\-live\-rebuild
 Do not rebuild packages in the @live-rebuild set (-9999 ebuilds).
 By default this set is rebuilt on every run.
@@ -255,6 +252,12 @@ Implied if neither \fBbuildkernel\fR nor \fBgenkernel\fR is installed.
 .TP
 .BR \-p ", " \-\-no\-perl\-cleaner
 Do not run \fBperl-cleaner\fR(1).
+.TP
+.BR \-P ", " \-\-purge\-old\-binpkgs
+Purge binary packages for versions no longer in the tree, older than four
+weeks (using \fBeclean --time-limit=4w packages\fR, without \fB--deep\fR).
+Off by default; never done when PKGDIR is a mount point or on a network
+filesystem.
 .TP
 .BR \-r ", " \-\-adjustment\=N
 Set niceness adjustment (-20 <= N <= 19) for \fBemerge\fR(1) and
