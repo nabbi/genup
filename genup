@@ -1365,6 +1365,18 @@ check_webapp_config() {
 
 }
 
+newest_installed_kernel() {
+    # print the newest kernel release with installed modules; a full
+    # modules_install leaves modules.builtin, so directories holding only
+    # leftover external modules are ignored
+    local d
+    for d in /lib/modules/*/; do
+        [[ -f "${d}modules.builtin" ]] || continue
+        d="${d%/}"
+        printf '%s\n' "${d##*/}"
+    done | sort -V | tail -n 1
+}
+
 display_final_status() {
     local subject="successful"
     local body=""
@@ -1397,6 +1409,21 @@ display_final_status() {
 
             subject+=" old kernel"
             body+="Running on an old kernel, an upgrade is available \n\n"
+        fi
+    fi
+    # generic reboot reminder (e.g. dist-kernel, or a kernel built on an
+    # earlier run): repeated on every run until the newest kernel is booted.
+    # buildkernel setups have their own staging-aware check above.
+    if ((KERNELBUILT==0)) && [[ "${USE_BUILDKERNEL}" != true ]]; then
+        local running newest
+        running="$(uname -r)"
+        newest="$(newest_installed_kernel || true)"
+        if [[ -n "${newest}" && "${newest}" != "${running}" && \
+            "$(printf '%s\n%s\n' "${running}" "${newest}" | sort -V | tail -n 1)" == "${newest}" ]]; then
+            subject+=" reboot required"
+            warning "Running kernel ${running}, but ${newest} is installed;"
+            warning "reboot to start using it."
+            body+="Reboot required: running kernel ${running}, newest installed ${newest}\n\n"
         fi
     fi
     if ((NEEDSDISPATCHCONF==2)); then

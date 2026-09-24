@@ -41,7 +41,7 @@ Compared to the original sakaki-/genup, this fork adds or improves support for:
 
   * Used if installed and `buildkernel` is not available
 
-The script has been deliberately decoupled from a hard dependency on the ebuilds that configure `emtee` and `buildkernel`. If these optional components are present on the system, genup will automatically detect and use them.
+The script has been deliberately decoupled from a hard dependency on the ebuilds that configure `emtee` and `buildkernel`. If these optional components are present on the system, genup will automatically detect and use them. Note that `emtee` and `buildkernel` (like the original genup) are no longer maintained upstream.
 
 ---
 
@@ -132,7 +132,7 @@ The script has been deliberately decoupled from a hard dependency on the ebuilds
   * Using `eix-sync -0`
 * Runs any custom updater scripts found in `/etc/genup/updaters.d` (a failing updater is fatal)
 * Unmounts `/boot` (or remounts it read-only) if genup changed its state
-* Reports final status, including pending config changes, a deprecated Portage profile, `glsa-check` results and unread `eselect news`
+* Reports final status, including pending config changes, a pending reboot into a newer installed kernel, a deprecated Portage profile, `glsa-check` results and unread `eselect news`
 
 genup must be run as root, and refuses to start while another genup run holds `/run/genup.lock`. It can be run in non-interactive mode (the default) or interactive mode using the **--ask** option. Non-interactive mode is suitable for scripted execution, such as nightly **cron**(8) jobs. See `genup --help` or **genup**(8) for all options.
 
@@ -142,7 +142,7 @@ genup must be run as root, and refuses to start while another genup run holds `/
 
 Example `crontab` and `logrotate` files are included. genup does not write a log file itself, so redirect its output to `/var/log/genup.log` as shown in the example crontab; error emails include the tail of that log.
 
-Email notifications are enabled with `--email a@example.com,b@example.com --email-from host@example.com` (both are required). An email is sent on error, and on success only when there is something to report: a new or outdated kernel, pending config changes, a deprecated profile, GLSAs, unread news, or unused webapp installs.
+Email notifications are enabled with `--email a@example.com,b@example.com --email-from host@example.com` (both are required). An email is sent on error, and on success only when there is something to report: a new or outdated kernel, a reboot required to run the newest installed kernel, pending config changes, a deprecated profile, GLSAs, unread news, or unused webapp installs.
 
 ---
 
