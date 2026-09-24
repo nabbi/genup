@@ -86,6 +86,7 @@ FALLBACK_SENTINEL="/run/genup/.full-emptytree-emerge-performed"
 PORTAGEINFO=""
 PORTAGEFEATURES=""
 declare -i KERNELBUILT=0 KERNELDEPLOYED=0 NEEDSDISPATCHCONF=0
+NEWS_SNAPSHOT=""     # unread news list, captured right after the sync
 declare -i WEBRSYNC=0 WEBAPP_CONFIG=0
 # program arguments (booleans in this case)
 declare -i ARG_ASK=0 ARG_DEPLOYFROMSTAGING=0 ARG_HELP=0 ARG_NO_KERNEL_UPGRADE=0
@@ -629,6 +630,25 @@ update_portage_tree_and_sync_eix() {
         # Intentionally allow word-splitting in EIXSYNCARGS (user-supplied extra args).
         # shellcheck disable=SC2086
         eix-sync ${EIXSYNCARGS}
+    fi
+}
+
+review_news_after_sync() {
+    # snapshot unread news now, so the final report/email still lists items
+    # the user reads mid-run; in interactive mode, offer to read them before
+    # anything is updated (some items need action before upgrading)
+    NEWS_SNAPSHOT=$(eselect news list new 2>/dev/null || true)
+    if [[ -z "${NEWS_SNAPSHOT}" ]] || grep -q "none found" <<< "${NEWS_SNAPSHOT}"; then
+        NEWS_SNAPSHOT=""
+        return
+    fi
+    show "There are unread news items:"
+    show "${NEWS_SNAPSHOT}"
+    if ((ARG_ASK==1)); then
+        if test_yn "Read them now, before updating"; then
+            eselect news read new
+            continue_yn "Continue with the update"
+        fi
     fi
 }
 
@@ -1384,9 +1404,16 @@ except Exception:
         body+="${glsa}\n\n"
     fi
 
-    local news
-    news=$(eselect news list new || true)
-    if ! grep -q "none found" <<< "${news}"; then
+    # prefer the post-sync snapshot: items read during an interactive run
+    # are no longer "new", but still belong in the report
+    local news="${NEWS_SNAPSHOT}"
+    if [[ -z "${news}" ]]; then
+        news=$(eselect news list new || true)
+        if grep -q "none found" <<< "${news}"; then
+            news=""
+        fi
+    fi
+    if [[ -n "${news}" ]]; then
         show
         show "${news}"
         body+="${news}\n\n"
@@ -1724,6 +1751,7 @@ set_usepkg
 check_if_using_webrsync_gpg
 display_greeting
 update_portage_tree_and_sync_eix
+review_news_after_sync
 update_user_patches
 mount_boot
 remove_any_prior_emerge_resume_history

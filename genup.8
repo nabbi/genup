@@ -22,6 +22,11 @@ in webrsync-gpg mode) if eix is not installed; if the deprecated \fBwebrsync-gpg
 are first updated with \fBemaint sync --auto\fR and \fBeix-sync -w\fR is used;
 skipped entirely if any repository location is read-only)
 .IP \(bu 2
+checks for unread news items
+.br
+(listed for the final report; in interactive mode, offers to read them with
+\fBeselect news read new\fR before anything is updated)
+.IP \(bu 2
 updates Portage user patches (if \fI/etc/portage/patches\fR is a git repository)
 .br
 (using \fBgit -C /etc/portage/patches pull\fR)
