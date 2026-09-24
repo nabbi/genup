@@ -36,6 +36,7 @@ VERSION="1.1.2"
 LOG="/var/log/genup.log"
 UPDATERSDIR="/etc/${PROGNAME}/updaters.d"
 FIXUPSCRIPT="/etc/cron.weekly/fixup"
+LOCKFILE="/run/${PROGNAME}.lock"
 
 RED_TEXT="" GREEN_TEXT="" YELLOW_TEXT="" RESET_ATTS="" ALERT_TEXT=""
 
@@ -383,6 +384,20 @@ trap 'trap_err "$?" "${LINENO}" "${BASH_COMMAND}"' ERR
 check_if_root() {
     if [ "$EUID" -ne 0 ]; then
         die "aborting, ran as non-root user or without sudo"
+    fi
+}
+
+acquire_run_lock() {
+    # refuse to run concurrently with another genup (e.g. a manual run while
+    # a long cron run is still building). The lock is held on fd 9 until we
+    # exit; a self-update re-exec re-takes it in the new process.
+    if ! have_cmd flock; then
+        warning "flock not found; cannot guard against concurrent runs"
+        return
+    fi
+    exec 9>"${LOCKFILE}"
+    if ! flock -n 9; then
+        die "another ${PROGNAME} run is in progress (lock ${LOCKFILE} held)"
     fi
 }
 
@@ -1672,6 +1687,7 @@ process_command_line_options() {
 suppress_colour_and_alert_if_output_not_to_a_terminal
 process_command_line_options "${@}"
 check_if_root
+acquire_run_lock
 set_idle_io_priority
 set_usepkg
 check_if_using_webrsync_gpg

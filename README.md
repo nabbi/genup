@@ -131,7 +131,7 @@ The script has been deliberately decoupled from a hard dependency on the ebuilds
 * Unmounts `/boot` (or remounts it read-only) if genup changed its state
 * Reports final status, including pending config changes, `glsa-check` results and unread `eselect news`
 
-genup must be run as root. It can be run in non-interactive mode (the default) or interactive mode using the **--ask** option. Non-interactive mode is suitable for scripted execution, such as nightly **cron**(8) jobs. See `genup --help` or **genup**(8) for all options.
+genup must be run as root, and refuses to start while another genup run holds `/run/genup.lock`. It can be run in non-interactive mode (the default) or interactive mode using the **--ask** option. Non-interactive mode is suitable for scripted execution, such as nightly **cron**(8) jobs. See `genup --help` or **genup**(8) for all options.
 
 ---
 

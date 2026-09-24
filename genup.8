@@ -8,7 +8,8 @@ genup \- update Portage tree, all installed packages, and kernel
 .B genup
 is a utility intended to simplify the process of keeping your Gentoo system
 up to date.
-It must be run as root.
+It must be run as root, and refuses to start while another genup run holds
+\fI/run/genup.lock\fR.
 When invoked, it automatically performs the following steps, in order:
 .br
 .RS
