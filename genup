@@ -625,17 +625,6 @@ update_portage_tree_and_sync_eix() {
         # shellcheck disable=SC2086
         eix-sync ${EIXSYNCARGS}
     fi
-
-    # support legacy layman sync
-    if have_cmd layman ; then
-        local laymanlocation
-        laymanlocation=$(grep -we "^storage" /etc/layman/layman.cfg | awk '{ print $3 }' || true)
-        if [ -w "${laymanlocation}" ]; then
-            layman ${VERBOSITYFLAG} -S
-        else
-            warning "detected read-only layman path ${laymanlocation}, not performing layman sync"
-        fi
-    fi
 }
 
 update_user_patches() {
@@ -1458,8 +1447,8 @@ Options:
   -r, --adjustment=N    set emerge/buildkernel niceness to N, -20<=N<=19
                         (the default is 19, running builds at lowest possible
                         system priority to avoid slowing the system too much)
-  -S, --no-eix-sync     do not sync repositories (emaint sync --auto, eix-sync,
-                        layman) or git pull /etc/portage/patches
+  -S, --no-eix-sync     do not sync repositories (emaint sync --auto, eix-sync)
+                        or git pull /etc/portage/patches
   -v, --verbose         ask called programs to display more information
   -V, --version         display the version number of ${PROGNAME} and exit
   -x, --eix-sync-args=ARGS

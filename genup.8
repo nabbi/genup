@@ -20,7 +20,6 @@ updates Portage tree & overlays; syncs \fBeix\fR(1)
 (using \fBeix-sync\fR, or \fBemaint sync --auto\fR (\fBemerge-webrsync\fR
 in webrsync-gpg mode) if eix is not installed; if the \fBwebrsync-gpg\fR FEATURE is set, overlays
 are first updated with \fBemaint sync --auto\fR and \fBeix-sync -w\fR is used;
-legacy \fBlayman\fR overlays are synced with \fBlayman -S\fR if installed;
 skipped entirely if any repository location is read-only)
 .IP \(bu 2
 updates Portage user patches (if \fI/etc/portage/patches\fR is a git repository)
@@ -247,8 +246,8 @@ Set niceness adjustment (-20 <= N <= 19) for \fBemerge\fR(1) and
 The default is 19 (lowest priority).
 .TP
 .BR \-S ", " \-\-no\-eix\-sync
-Do not sync the repositories (\fBemaint sync --auto\fR, \fBeix-sync\fR,
-\fBlayman -S\fR) at start of run, and do not pull Portage user patches.
+Do not sync the repositories (\fBemaint sync --auto\fR, \fBeix-sync\fR)
+at start of run, and do not pull Portage user patches.
 .TP
 .BR \-v ", " \-\-verbose
 Enable verbose output.
