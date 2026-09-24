@@ -32,7 +32,7 @@ shopt -s nullglob
 
 # ********************** variables ********************* 
 PROGNAME="$(basename "${0}")"
-VERSION="1.1.2"
+VERSION="1.2.0"
 LOG="/var/log/genup.log"
 UPDATERSDIR="/etc/${PROGNAME}/updaters.d"
 FIXUPSCRIPT="/etc/cron.weekly/fixup"
