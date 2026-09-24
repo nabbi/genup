@@ -604,7 +604,15 @@ update_portage_tree_and_sync_eix() {
     fi
 
     if ! have_cmd eix-sync; then
-        warning "eix-sync not found; skipping tree sync"
+        # never go on to update @world against a stale tree
+        if ((WEBRSYNC==1)); then
+            # overlays were synced above; gentoo itself is auto-sync = no
+            show "eix-sync not found; updating Portage tree with emerge-webrsync..."
+            emerge-webrsync
+        else
+            show "eix-sync not found; updating repositories with emaint sync --auto..."
+            emaint sync --auto
+        fi
     else
         show "Updating Portage tree and syncing the eix cache"
         show "(this may take some time)..."

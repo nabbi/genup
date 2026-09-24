@@ -17,7 +17,8 @@ When invoked, it automatically performs the following steps, in order:
 updates Portage tree & overlays; syncs \fBeix\fR(1)
 (if desired)
 .br
-(using \fBeix-sync\fR; if the \fBwebrsync-gpg\fR FEATURE is set, overlays
+(using \fBeix-sync\fR, or \fBemaint sync --auto\fR (\fBemerge-webrsync\fR
+in webrsync-gpg mode) if eix is not installed; if the \fBwebrsync-gpg\fR FEATURE is set, overlays
 are first updated with \fBemaint sync --auto\fR and \fBeix-sync -w\fR is used;
 legacy \fBlayman\fR overlays are synced with \fBlayman -S\fR if installed;
 skipped entirely if any repository location is read-only)
