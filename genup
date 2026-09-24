@@ -1028,28 +1028,28 @@ offer_kernel_upgrade_to_staging_if_available() {
     fi
 
     local current_kv running_base
-    local sel_idx sel_kv last_idx last_kv
+    local sel_kv last_idx last_kv
     local do_upgrade=0
 
     current_kv="$(readlink /usr/src/linux 2>/dev/null || true)"
     running_base="$(uname -r | sed 's/-.*//' || true)"
 
     # Parse eselect kernel list once:
-    # Output: <sel_idx>|<sel_kv>|<last_idx>|<last_kv>
+    # Output: <sel_kv>|<last_idx>|<last_kv>
     # Use a '|' delimiter with an explicit IFS so that empty leading fields
     # (e.g. when no "*"-marked selected line exists) are preserved rather than
     # collapsed by the default whitespace IFS, which would shift columns left.
-    IFS='|' read -r sel_idx sel_kv last_idx last_kv < <(
+    IFS='|' read -r sel_kv last_idx last_kv < <(
         eselect kernel list 2>/dev/null | awk '
             $1 ~ /^\[[0-9]+\]$/ {
                 idx=$1; gsub(/^\[/,"",idx); gsub(/\]$/,"",idx)
                 kv=$2
                 last_idx=idx; last_kv=kv
-                if ($0 ~ /\*$/) { sel_idx=idx; sel_kv=kv }
+                if ($0 ~ /\*$/) { sel_kv=kv }
             }
             END {
-                # If no "*" line was seen, sel_* may be empty; still print.
-                printf "%s|%s|%s|%s\n", sel_idx, sel_kv, last_idx, last_kv
+                # If no "*" line was seen, sel_kv may be empty; still print.
+                printf "%s|%s|%s\n", sel_kv, last_idx, last_kv
             }
         '
     )
