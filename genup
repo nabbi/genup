@@ -214,8 +214,24 @@ send_email() {
     # Split the comma-separated recipient list into separate arguments so
     # sendmail receives each address individually (quoting the whole list
     # would pass it as one invalid recipient).
-    local -a recipients
-    IFS=',' read -ra recipients <<< "${EMAIL_TO}"
+    # Trim surrounding whitespace from each entry and drop empty ones, so
+    # "a@x, b@y," yields exactly two clean addresses.
+    local -a recipients=()
+    local -a raw_recipients
+    local r
+    IFS=',' read -ra raw_recipients <<< "${EMAIL_TO}"
+    for r in "${raw_recipients[@]}"; do
+        r="${r#"${r%%[![:space:]]*}"}"
+        r="${r%"${r##*[![:space:]]}"}"
+        if [[ -n "${r}" ]]; then
+            recipients+=("${r}")
+        fi
+    done
+
+    if (( ${#recipients[@]} == 0 )); then
+        warning "no valid email recipients in '${EMAIL_TO}'; skipping email notification"
+        return 0
+    fi
 
     body="\n$(hostname)\n"
     body+="$(date)\n"
