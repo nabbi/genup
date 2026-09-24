@@ -1513,6 +1513,9 @@ check_if_using_webrsync_gpg() {
     if grep -qi "webrsync-gpg" <<<"${PORTAGEFEATURES}"; then
         # force use of emerge-webrsync instead of emerge --sync
         show "Portage feature webrsync-gpg detected: using -w option with eix-sync"
+        warning "FEATURES=webrsync-gpg is deprecated; prefer 'sync-type = webrsync' and"
+        warning "'sync-webrsync-verify-signature = yes' for [gentoo] in repos.conf"
+        warning "(then drop the feature; genup needs no special handling for it)"
         EIXSYNCARGS="-w ${EIXSYNCARGS}"
         WEBRSYNC=1
     fi

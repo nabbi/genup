@@ -51,7 +51,7 @@ The script has been deliberately decoupled from a hard dependency on the ebuilds
 
 * Updates the Portage tree and active overlays, and syncs **eix**(1)
 
-  * Using `eix-sync`, or `emaint sync --auto` (`emerge-webrsync` in webrsync-gpg mode) if eix is not installed (plus `emaint sync --auto` first when the `webrsync-gpg` FEATURE is set); skipped if any repository is read-only
+  * Using `eix-sync`, or `emaint sync --auto` (`emerge-webrsync` in webrsync-gpg mode) if eix is not installed (plus `emaint sync --auto` first when the deprecated `webrsync-gpg` FEATURE is set); skipped if any repository is read-only
 * Updates Portage user patches (if `/etc/portage/patches` is a git repo)
 
   * Using `git -C /etc/portage/patches pull`
