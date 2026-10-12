@@ -95,10 +95,13 @@ declare -i ARG_KEEP_OLD_DISTFILES=0 ARG_PURGE_OLD_BINPKGS=0
 declare -i ARG_NO_PERL_CLEANER=0
 declare -i ARG_NO_EIX_SYNC=0 ARG_ALERT=0
 declare -i ARG_IGNORE_REQUIRED_CHANGES=0 ARG_NO_CUSTOM_UPDATERS=0
-declare -i ARG_NO_FIXUPS=0
+declare -i ARG_NO_FIXUPS=0 ARG_NO_NOTIFY=0
 declare -i ARG_NO_EIX_METADATA_UPDATE=0
 declare -i ARG_NO_MODULE_REBUILD=0 ARG_NO_LIVE_REBUILD=0
 declare -i ADJUSTMENT=19
+
+# run start time, kept across a self-update re-exec (for the notification)
+export GENUP_START_EPOCH="${GENUP_START_EPOCH:-$(date +%s)}"
 
 # store copy of original args, and canonical path to genup itself
 ORIGINAL_ARGS=("$@")
@@ -264,6 +267,104 @@ send_email() {
     return 0
 }
 
+notify_escape() {
+    # escape text for the (markup-capable) notification body; the '&' in
+    # each replacement is backslashed, as bash 5.2 otherwise expands it to
+    # the matched text (patsub_replacement)
+    local s="${1-}"
+    s="${s//&/\&amp;}"
+    s="${s//</\&lt;}"
+    s="${s//>/\&gt;}"
+    printf "%s" "${s}"
+}
+
+notify_targets() {
+    # Print "user<TAB>bus-address" for each non-root user with a graphical
+    # session. genup runs as root (often from cron), so it cannot reach a
+    # desktop's notification daemon directly: borrow the session bus
+    # address from one of the user's processes that also carries DISPLAY or
+    # WAYLAND_DISPLAY. Works without a per-user /run/user bus (e.g. startx
+    # with dbus-launch) and without relying on loginctl session types.
+    local uid pid kv bus graphical user
+    local -A seen=()
+    while read -r uid pid; do
+        (( uid != 0 )) || continue
+        [[ -z "${seen[${uid}]:-}" ]] || continue
+        bus="" graphical=0
+        while IFS= read -r -d '' kv; do
+            case "${kv}" in
+                DBUS_SESSION_BUS_ADDRESS=*) bus="${kv#*=}" ;;
+                DISPLAY=?*|WAYLAND_DISPLAY=?*) graphical=1 ;;
+            esac
+        done 2>/dev/null < "/proc/${pid}/environ" || continue
+        if [[ -n "${bus}" ]] && ((graphical==1)); then
+            user="$(getent passwd "${uid}" | cut -d: -f1)" || continue
+            [[ -n "${user}" ]] || continue
+            seen[${uid}]=1
+            printf "%s\t%s\n" "${user}" "${bus}"
+        fi
+    done < <(ps -eo uid=,pid= 2>/dev/null)
+}
+
+desktop_notify() {
+    # Usage: desktop_notify URGENCY ICON SUMMARY [BODY]
+    # Best-effort desktop notification via notify-send; never fails. The
+    # body may contain markup, so escape any untrusted text with
+    # notify_escape. All genup notifications share a stack tag, so on
+    # servers that honour it (dunst, mako, GNOME) each one replaces the last.
+    ((ARG_NO_NOTIFY==0)) || return 0
+    have_cmd notify-send || return 0
+    local -a args=(-a "${PROGNAME}" -u "${1}" -i "${2}"
+        -h "string:x-dunst-stack-tag:${PROGNAME}"
+        -h "string:x-canonical-private-synchronous:${PROGNAME}"
+        -h "boolean:suppress-sound:true")
+    if [[ "${1}" == "low" ]]; then
+        args+=(-e)   # transient: keep out of history
+    fi
+    args+=(-- "${3}" "${4:-}")
+
+    if [[ "${EUID}" -ne 0 ]]; then
+        timeout 10 notify-send "${args[@]}" >/dev/null 2>&1 || true
+        return 0
+    fi
+    have_cmd runuser || return 0
+    local user bus
+    while IFS=$'\t' read -r user bus; do
+        timeout 10 runuser -u "${user}" -- \
+            env DBUS_SESSION_BUS_ADDRESS="${bus}" \
+            notify-send "${args[@]}" >/dev/null 2>&1 || true
+    done < <(notify_targets)
+    return 0
+}
+
+notify_output_hint() {
+    # genup writes no log itself: output is only in ${LOG} when redirected
+    # there (as in the example crontab)
+    if [[ -t 1 ]]; then
+        printf "Output is in the terminal"
+    else
+        printf "Log: %s" "${LOG}"
+    fi
+}
+
+notify_elapsed() {
+    # human-readable run time, measured across a self-update re-exec
+    local -i secs=$(( $(date +%s) - GENUP_START_EPOCH ))
+    if ((secs >= 3600)); then
+        printf "%dh %02dm" $((secs / 3600)) $((secs % 3600 / 60))
+    else
+        printf "%dm %02ds" $((secs / 60)) $((secs % 60))
+    fi
+}
+
+notify_start() {
+    # skip the restarted process after a self-update: the user was already told
+    [[ -z "${GENUP_RESTARTED:-}" ]] || return 0
+    desktop_notify low system-software-update \
+        "${PROGNAME} started on $(hostname)" \
+        "Updating @world (v${VERSION})"$'\n'"$(notify_output_hint)"
+}
+
 email_log_tails() {
     # Return a short tail of the logfile to stdout (for callers to capture).
     # Do not print side effects directly to the terminal.
@@ -350,9 +451,13 @@ die() {
     printf "\n" >&2
     printf "%b\n" "${RED_TEXT}${PREFIXSTRING}${RESET_ATTS}${PROGNAME}: Error: ${1:-} - exiting" >&2
 
-    local body
+    local body msg="${1:-}"
     body="$(email_log_tails)"
-    send_email "error" "Error: ${1:-} - exiting\n\n${body}"
+    send_email "error" "Error: ${msg} - exiting\n\n${body}"
+    (( ${#msg} <= 200 )) || msg="${msg:0:200}..."
+    desktop_notify critical dialog-error \
+        "${PROGNAME} failed on $(hostname)" \
+        "$(notify_escape "${msg}")"$'\n'"<i>$(notify_output_hint)</i>"
     cleanup_and_exit_with_code 1
 }
 
@@ -759,6 +864,7 @@ ensure_genup_itself_is_up_to_date() {
     if [[ $("${SCRIPTPATH}" --version) != "${VERSION}" ]]; then
         warning "The version of genup has changed!"
         warning "Restarting genup process..."
+        export GENUP_RESTARTED=1
         exec "${SCRIPTPATH}" "${ORIGINAL_ARGS[@]}"
     fi
 }
@@ -1380,6 +1486,7 @@ newest_installed_kernel() {
 display_final_status() {
     local subject="successful"
     local body=""
+    local -a attention=()   # one-line items for the desktop notification
 
     show
     if ((KERNELBUILT==1)); then
@@ -1388,14 +1495,17 @@ display_final_status() {
             show "A new kernel has been built successfully, and deployed to your"
             show "EFI system partition; it will be used from the next reboot."
             body+="New kernel built pending reboot\n\n"
+            attention+=("New kernel deployed: reboot to use it")
         elif [[ "$USE_BUILDKERNEL" = true ]]; then
             show "An updated kernel has been successfully built in the staging area!"
             show "You can install it to your EFI system partition by issuing:"
             show "  buildkernel --copy-from-staging"
             body+="New kernel built in staging area\n\n"
+            attention+=("New kernel in staging: buildkernel --copy-from-staging")
         elif [[ "$USE_GENKERNEL" = true ]]; then
             show ""
             body+="Genkernel built $(readlink /usr/src/linux) to replace running kernel $(uname -r)\n\n"
+            attention+=("New kernel built: reboot to use it")
         else
             warning "Huh. We might have build a kernel but have no idea what happened to it"
         fi
@@ -1409,6 +1519,7 @@ display_final_status() {
 
             subject+=" old kernel"
             body+="Running on an old kernel, an upgrade is available \n\n"
+            attention+=("Running an old kernel: an upgrade is available")
         fi
     fi
     # generic reboot reminder (e.g. dist-kernel, or a kernel built on an
@@ -1424,6 +1535,7 @@ display_final_status() {
             warning "Running kernel ${running}, but ${newest} is installed;"
             warning "reboot to start using it."
             body+="Reboot required: running kernel ${running}, newest installed ${newest}\n\n"
+            attention+=("Reboot required: ${running} → ${newest}")
         fi
     fi
     if ((NEEDSDISPATCHCONF==2)); then
@@ -1433,6 +1545,7 @@ display_final_status() {
     if ((NEEDSDISPATCHCONF==1)); then
         subject+=" new configs"
         body+="Please run dispatch-conf to review new configurations\n\n"
+        attention+=("Config changes pending: run dispatch-conf")
         show
         warning "There are configuration file changes pending review!"
         warning "Please run dispatch-conf to interactively resolve them."
@@ -1469,6 +1582,7 @@ except Exception:
         warning "Your Portage profile is deprecated:"
         show "${profile_msg}"
         body+="${profile_msg}\n\n"
+        attention+=("Portage profile is deprecated")
     fi
 
     local glsa
@@ -1479,6 +1593,7 @@ except Exception:
         show
         show "${glsa}"
         body+="${glsa}\n\n"
+        attention+=("Security advisories affect this system (glsa-check -t all)")
     fi
 
     # prefer the post-sync snapshot: items read during an interactive run
@@ -1494,6 +1609,7 @@ except Exception:
         show
         show "${news}"
         body+="${news}\n\n"
+        attention+=("Unread news: eselect news read")
     fi
 
     if ((WEBAPP_CONFIG==1)); then
@@ -1504,6 +1620,7 @@ except Exception:
         show "${webapp}"
         body+="webapp-config --list-unused-install\n${webapp}\n\n"
         body+="--depclean was skipped to avoid breaking existing webapp installs\n\n"
+        attention+=("Unused webapp installs (depclean skipped)")
     fi
 
     show
@@ -1517,6 +1634,19 @@ except Exception:
 
     if [[ -n "${body}" ]]; then
         send_email "${subject}" "${body}"
+    fi
+
+    local nbody item
+    nbody="Finished in $(notify_elapsed)"
+    if (( ${#attention[@]} == 0 )); then
+        desktop_notify normal emblem-default \
+            "${PROGNAME} completed on $(hostname)" "${nbody}"
+    else
+        for item in "${attention[@]}"; do
+            nbody+=$'\n'"• $(notify_escape "${item}")"
+        done
+        desktop_notify normal dialog-warning \
+            "${PROGNAME} completed on $(hostname): action needed" "${nbody}"
     fi
 }
 
@@ -1576,6 +1706,9 @@ Options:
   -n, --no-kernel-upgrade
                         do not attempt to build a new kernel (implied if
                         neither buildkernel nor genkernel is installed)
+  --no-notify           don't send desktop notifications (by default, when
+                        notify-send is installed, logged-in graphical users
+                        are notified when ${PROGNAME} starts, fails or completes)
   -p, --no-perl-cleaner do not attempt to run perl-cleaner
   -P, --purge-old-binpkgs
                         purge binary packages for versions no longer in the
@@ -1658,7 +1791,7 @@ process_command_line_options() {
     declare -i RC
 
     local short_opts="aAb:cCde:EFhiklmMnpPr:SvVx:"
-    local long_opts="ask,alert,compiler:,email:,email-from:,buildkernel-args:,dispatch-conf,no-custom-updaters,deploy-from-staging,emerge-args:,no-emtee,no-fixups,help,ignore-required-changes,keep-old-distfiles,purge-old-binpkgs,no-eix-metadata-update,no-live-rebuild,no-module-rebuild,no-kernel-upgrade,no-perl-cleaner,adjustment:,no-eix-sync,verbose,version,eix-sync-args:"
+    local long_opts="ask,alert,compiler:,email:,email-from:,buildkernel-args:,dispatch-conf,no-custom-updaters,no-notify,deploy-from-staging,emerge-args:,no-emtee,no-fixups,help,ignore-required-changes,keep-old-distfiles,purge-old-binpkgs,no-eix-metadata-update,no-live-rebuild,no-module-rebuild,no-kernel-upgrade,no-perl-cleaner,adjustment:,no-eix-sync,verbose,version,eix-sync-args:"
 
     set +e
     TEMP="$(getopt \
@@ -1685,6 +1818,7 @@ process_command_line_options() {
                 esac ;;
             -c|--dispatch-conf) ARG_DISPATCHCONF=1 ; shift ;;
             -C|--no-custom-updaters) ARG_NO_CUSTOM_UPDATERS=1 ; shift ;;
+            --no-notify) ARG_NO_NOTIFY=1 ; shift ;;
             -d|--deploy-from-staging) ARG_DEPLOYFROMSTAGING=1 ; shift ;;
             --email)
                 case "${2}" in
@@ -1830,6 +1964,7 @@ suppress_colour_and_alert_if_output_not_to_a_terminal
 process_command_line_options "${@}"
 check_if_root
 acquire_run_lock
+notify_start
 set_idle_io_priority
 set_usepkg
 check_if_using_webrsync_gpg

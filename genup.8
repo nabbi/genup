@@ -251,6 +251,13 @@ Do not rebuild external kernel modules.
 Do not attempt to build or deploy a new kernel.
 Implied if neither \fBbuildkernel\fR nor \fBgenkernel\fR is installed.
 .TP
+.BR \-\-no\-notify
+Do not send desktop notifications.
+By default, when \fBnotify-send\fR(1) is installed, every logged-in user
+with a graphical session is notified when genup starts, fails, or
+completes (listing any follow-up actions, such as a pending reboot or
+configuration changes).
+.TP
 .BR \-p ", " \-\-no\-perl\-cleaner
 Do not run \fBperl-cleaner\fR(1).
 .TP
@@ -322,6 +329,7 @@ sakaki \- original author
 .BR gcc-config (1),
 .BR glsa-check (1),
 .BR nice (1),
+.BR notify-send (1),
 .BR perl-cleaner (1),
 .BR buildkernel (8),
 .BR genkernel (8),

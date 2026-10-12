@@ -144,6 +144,10 @@ Example `crontab` and `logrotate` files are included. genup does not write a log
 
 Email notifications are enabled with `--email a@example.com,b@example.com --email-from host@example.com` (both are required). An email is sent on error, and on success only when there is something to report: a new or outdated kernel, a reboot required to run the newest installed kernel, pending config changes, a deprecated profile, GLSAs, unread news, or unused webapp installs.
 
+### Desktop notifications
+
+When `notify-send` (x11-libs/libnotify) is installed, genup notifies every logged-in user with a graphical session when it starts, fails, or completes, even when it runs as root from cron. On completion, the notification lists anything that needs attention (reboot, `dispatch-conf`, news, GLSAs). Failures are sent as critical, so they stay on screen until dismissed. Each notification replaces the previous one on servers that support stack tags (dunst, mako, GNOME). Disable with `--no-notify`.
+
 ---
 
 ## Installation
