@@ -149,7 +149,7 @@ Email notifications are enabled with `--email a@example.com,b@example.com --emai
 
 ### Desktop notifications
 
-When `notify-send` (x11-libs/libnotify) is installed, genup notifies every logged-in user with a graphical session when it starts, fails, or completes, even when it runs as root from cron. On completion, the notification lists anything that needs attention (reboot, `dispatch-conf`, news, GLSAs). Failures are sent as critical, so they stay on screen until dismissed. Each notification replaces the previous one on servers that support stack tags (dunst, mako, GNOME). Disable with `--no-notify`.
+When `notify-send` (x11-libs/libnotify) is installed, genup notifies every logged-in user with a graphical session when it starts, fails, or completes, even when it runs as root from cron. On completion, the notification lists anything that needs attention (reboot, `dispatch-conf`, news, GLSAs). The start notification stays on screen until you dismiss it or the final notification replaces it (with libnotify 0.8.0 or later, via `--replace-id`; elsewhere through stack tags on dunst, mako and GNOME). Failures are sent as critical, so they stay on screen until dismissed. Disable with `--no-notify`.
 
 ---
 

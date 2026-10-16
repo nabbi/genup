@@ -104,6 +104,9 @@ declare -i ADJUSTMENT=19
 
 # run start time, kept across a self-update re-exec (for the notification)
 export GENUP_START_EPOCH="${GENUP_START_EPOCH:-$(date +%s)}"
+# "user:id ..." of the start notification, so the final one can replace it
+# (also kept across a self-update re-exec)
+export GENUP_NOTIFY_IDS="${GENUP_NOTIFY_IDS:-}"
 
 # store copy of original args, and canonical path to genup itself
 ORIGINAL_ARGS=("$@")
@@ -308,34 +311,80 @@ notify_targets() {
     done < <(ps -eo uid=,pid= 2>/dev/null)
 }
 
+notify_send_as() {
+    # Usage: notify_send_as USER BUS NOTIFY-SEND-ARGS...
+    # Run notify-send as USER on session bus BUS (both empty: as ourselves,
+    # on our own session), replacing USER's start notification if there is
+    # one. Prints the new id when the args include -p.
+    local user="${1}" bus="${2}" id="" kv
+    shift 2
+    for kv in ${GENUP_NOTIFY_IDS}; do
+        [[ "${kv%%:*}" != "${user}" ]] || id="${kv#*:}"
+    done
+    local -a args=("$@")
+    if [[ -n "${id}" ]] && ((NOTIFY_HAS_REPLACE==1)); then
+        args=(-r "${id}" "${args[@]}")
+    fi
+    if [[ -z "${user}" ]]; then
+        timeout 10 notify-send "${args[@]}" 2>/dev/null
+    else
+        timeout 10 runuser -u "${user}" -- \
+            env DBUS_SESSION_BUS_ADDRESS="${bus}" \
+            notify-send "${args[@]}" 2>/dev/null
+    fi
+}
+
 desktop_notify() {
-    # Usage: desktop_notify URGENCY ICON SUMMARY [BODY]
+    # Usage: desktop_notify [--persistent] URGENCY ICON SUMMARY [BODY]
     # Best-effort desktop notification via notify-send; never fails. The
     # body may contain markup, so escape any untrusted text with
-    # notify_escape. All genup notifications share a stack tag, so on
-    # servers that honour it (dunst, mako, GNOME) each one replaces the last.
+    # notify_escape. With --persistent, the notification stays on screen
+    # until dismissed or replaced by the next one, and its id is kept so
+    # the next one replaces it (needs libnotify >= 0.8.0). All genup
+    # notifications also share a stack tag, so on servers that honour it
+    # (dunst, mako, GNOME) each one replaces the last.
     ((ARG_NO_NOTIFY==0)) || return 0
     have_cmd notify-send || return 0
+    local -i persistent=0
+    if [[ "${1}" == "--persistent" ]]; then
+        persistent=1
+        shift
+    fi
+    if [[ -z "${NOTIFY_HAS_REPLACE:-}" ]]; then
+        NOTIFY_HAS_REPLACE=0
+        if notify-send --help 2>/dev/null | grep -q -- '--replace-id'; then
+            NOTIFY_HAS_REPLACE=1
+        fi
+    fi
     local -a args=(-a "${PROGNAME}" -u "${1}" -i "${2}"
         -h "string:x-dunst-stack-tag:${PROGNAME}"
         -h "string:x-canonical-private-synchronous:${PROGNAME}"
         -h "boolean:suppress-sound:true")
-    if [[ "${1}" == "low" ]]; then
+    if ((persistent==1)); then
+        args+=(-t 0)
+        ((NOTIFY_HAS_REPLACE==0)) || args+=(-p)
+    elif [[ "${1}" == "low" ]]; then
         args+=(-e)   # transient: keep out of history
     fi
     args+=(-- "${3}" "${4:-}")
 
+    local user bus id ids=""
     if [[ "${EUID}" -ne 0 ]]; then
-        timeout 10 notify-send "${args[@]}" >/dev/null 2>&1 || true
-        return 0
+        id="$(notify_send_as "" "" "${args[@]}")" || true
+        ids=":${id}"
+    else
+        have_cmd runuser || return 0
+        while IFS=$'\t' read -r user bus; do
+            id="$(notify_send_as "${user}" "${bus}" "${args[@]}")" || true
+            ids+="${ids:+ }${user}:${id}"
+        done < <(notify_targets)
     fi
-    have_cmd runuser || return 0
-    local user bus
-    while IFS=$'\t' read -r user bus; do
-        timeout 10 runuser -u "${user}" -- \
-            env DBUS_SESSION_BUS_ADDRESS="${bus}" \
-            notify-send "${args[@]}" >/dev/null 2>&1 || true
-    done < <(notify_targets)
+    # only a persistent notification is replaced by the next one
+    if ((persistent==1)) && ((NOTIFY_HAS_REPLACE==1)); then
+        GENUP_NOTIFY_IDS="${ids}"
+    else
+        GENUP_NOTIFY_IDS=""
+    fi
     return 0
 }
 
@@ -362,7 +411,7 @@ notify_elapsed() {
 notify_start() {
     # skip the restarted process after a self-update: the user was already told
     [[ -z "${GENUP_RESTARTED:-}" ]] || return 0
-    desktop_notify low system-software-update \
+    desktop_notify --persistent normal system-software-update \
         "${PROGNAME} started on $(hostname)" \
         "Updating @world (v${VERSION})"$'\n'"$(notify_output_hint)"
 }
