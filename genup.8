@@ -96,9 +96,13 @@ updates any old \fBperl\fR(1) modules (if desired)
 upgrades the kernel if possible
 .br
 (using \fBbuildkernel --stage-only\fR when available, which builds to the
-staging area in \fI/boot\fR; otherwise \fBgenkernel all\fR, which installs
-the kernel directly, removes old kernels with \fBeclean-kernel -n 2\fR if
-installed, and updates the bootloader with \fBgrub-mkconfig\fR or \fBlilo\fR)
+staging area in \fI/boot\fR; otherwise \fBgenkernel all\fR; otherwise,
+if \fBdracut\fR and \fBinstallkernel\fR are installed, \fBmake olddefconfig\fR,
+\fBmake\fR, \fBmake modules_install\fR and \fBmake install\fR in
+\fI/usr/src/linux\fR (running \fBdracut\fR directly if \fBinstallkernel\fR
+is configured with \fIinitrd_generator=none\fR); genkernel and dracut builds
+install the kernel directly, then remove old kernels with
+\fBeclean-kernel -n 2\fR if installed, and update the bootloader with \fBgrub-mkconfig\fR or \fBlilo\fR)
 .IP \(bu 2
 builds any external modules (such as those for VirtualBox), if a kernel was
 built during this run
@@ -247,9 +251,16 @@ Do not update eix metadata at end-of-run.
 .BR \-M ", " \-\-no\-module\-rebuild
 Do not rebuild external kernel modules.
 .TP
+.BR \-\-kernel\-builder\=\fITOOL\fR
+Select the kernel builder: \fBauto\fR (the default; the first installed of
+\fBbuildkernel\fR, \fBgenkernel\fR and \fBdracut\fR), \fBbuildkernel\fR,
+\fBgenkernel\fR or \fBdracut\fR.
+It is an error to name a builder that is not installed.
+.TP
 .BR \-n ", " \-\-no\-kernel\-upgrade
 Do not attempt to build or deploy a new kernel.
-Implied if neither \fBbuildkernel\fR nor \fBgenkernel\fR is installed.
+Implied if none of \fBbuildkernel\fR, \fBgenkernel\fR or
+\fBdracut\fR (with \fBinstallkernel\fR) is installed.
 .TP
 .BR \-\-no\-notify
 Do not send desktop notifications.
@@ -269,7 +280,7 @@ filesystem.
 .TP
 .BR \-r ", " \-\-adjustment\=N
 Set niceness adjustment (-20 <= N <= 19) for \fBemerge\fR(1) and
-\fBbuildkernel\fR(8) operations.
+kernel builds (\fBbuildkernel\fR(8), \fBgenkernel\fR(8), \fBmake\fR, \fBdracut\fR(8)).
 The default is 19 (lowest priority).
 .TP
 .BR \-S ", " \-\-no\-eix\-sync
@@ -333,6 +344,8 @@ sakaki \- original author
 .BR perl-cleaner (1),
 .BR buildkernel (8),
 .BR genkernel (8),
+.BR dracut (8),
+.BR installkernel (8),
 .BR revdep-rebuild (1),
 .BR cron (8),
 .BR portage (5).

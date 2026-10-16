@@ -40,6 +40,9 @@ Compared to the original sakaki-/genup, this fork adds or improves support for:
 * Kernel build support via `genkernel`
 
   * Used if installed and `buildkernel` is not available
+* Kernel build support via `dracut` (with `sys-kernel/installkernel`)
+
+  * Used if installed and neither `buildkernel` nor `genkernel` is available
 
 The script has been deliberately decoupled from a hard dependency on the ebuilds that configure `emtee` and `buildkernel`. If these optional components are present on the system, genup will automatically detect and use them. Note that `emtee` and `buildkernel` (like the original genup) are no longer maintained upstream.
 
@@ -99,7 +102,7 @@ The script has been deliberately decoupled from a hard dependency on the ebuilds
   * Using `perl-cleaner --all` (if installed)
 * Upgrades the kernel if possible
 
-  * Using `buildkernel --stage-only` (to staging, in `/boot`) when available; otherwise `genkernel all`, followed by `eclean-kernel -n 2` (if installed) and `grub-mkconfig` or `lilo`
+  * Using `buildkernel --stage-only` (to staging, in `/boot`) when available; otherwise `genkernel all`; otherwise `make olddefconfig && make && make modules_install && make install` in `/usr/src/linux`, letting `installkernel` run `dracut` (or running `dracut --kver` itself if `installkernel` has `initrd_generator=none`); genkernel and dracut builds are followed by `eclean-kernel -n 2` (if installed) and `grub-mkconfig` or `lilo`
 * Builds any external modules (such as those for VirtualBox), if a kernel was built this run
 
   * Using `emerge @module-rebuild --exclude '*-bin'`
