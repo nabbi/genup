@@ -379,7 +379,7 @@ desktop_notify() {
             ids+="${ids:+ }${user}:${id}"
         done < <(notify_targets)
     fi
-    # only a persistent notification is replaced by the next one
+    # a persistent notification is replaced by the next one
     if ((persistent==1)) && ((NOTIFY_HAS_REPLACE==1)); then
         GENUP_NOTIFY_IDS="${ids}"
     else
@@ -506,7 +506,7 @@ die() {
     body="$(email_log_tails)"
     send_email "error" "Error: ${msg} - exiting\n\n${body}"
     (( ${#msg} <= 200 )) || msg="${msg:0:200}..."
-    desktop_notify critical dialog-error \
+    desktop_notify --persistent critical dialog-error \
         "${PROGNAME} failed on $(hostname)" \
         "$(notify_escape "${msg}")"$'\n'"<i>$(notify_output_hint)</i>"
     cleanup_and_exit_with_code 1
@@ -1766,13 +1766,13 @@ except Exception:
     local nbody item
     nbody="Finished in $(notify_elapsed)"
     if (( ${#attention[@]} == 0 )); then
-        desktop_notify normal emblem-default \
+        desktop_notify --persistent normal emblem-default \
             "${PROGNAME} completed on $(hostname)" "${nbody}"
     else
         for item in "${attention[@]}"; do
             nbody+=$'\n'"• $(notify_escape "${item}")"
         done
-        desktop_notify normal dialog-warning \
+        desktop_notify --persistent normal dialog-warning \
             "${PROGNAME} completed on $(hostname): action needed" "${nbody}"
     fi
 }
